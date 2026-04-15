@@ -327,12 +327,21 @@ impl SqliDetector {
                 let true_sim = calculate_similarity(&baseline.body, &true_resp.body);
                 let false_sim = calculate_similarity(&baseline.body, &false_resp.body);
 
+                debug!(
+                    "Boolean blind ctx={} param={}: true_sim={:.4} false_sim={:.4} gap={:.4}",
+                    ctx, param, true_sim, false_sim, true_sim - false_sim,
+                );
+
                 // Pattern A: classic data-display boolean-blind.
                 // TRUE probe matches baseline, FALSE probe diverges.
+                // Use a relative gap instead of an absolute false_sim threshold so we
+                // catch targets where TRUE/FALSE pages differ by only a few percent
+                // (e.g. a different small image on success vs fail: ~3% body delta).
+                let sim_gap = true_sim - false_sim;
                 let classic = true_resp.status == baseline.status
                     && false_resp.status == baseline.status
                     && true_sim > 0.9
-                    && false_sim < 0.7;
+                    && sim_gap > 0.02;
 
                 // Pattern B: auth-bypass. Probe the actual bypass payload.
                 // If response differs strongly from baseline (status change or

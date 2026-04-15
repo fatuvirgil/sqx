@@ -1,0 +1,20 @@
+wing: intelexia_rust
+rooms:
+- name: src
+  description: Files from src/
+  keywords:
+  - src
+  - src
+- name: src_tauri
+  description: Files from src-tauri/
+  keywords:
+  - src_tauri
+  - src-tauri
+- name: scripts
+  description: Files from scripts/
+  keywords:
+  - scripts
+  - scripts
+- name: general
+  description: Files that don't fit other rooms
+  keywords: []

