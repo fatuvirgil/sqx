@@ -7,6 +7,7 @@ use crate::sqx::{
     detector::SqliDetector,
     evasion::tamper_chain::TamperChain,
     models::{HttpResponse, SqliTestResult, SqliTechnique},
+    payload_fetcher::DynamicPayloads,
     similarity::calculate_similarity,
 };
 
@@ -49,51 +50,32 @@ impl SqliDetector {
         let tests: Vec<_> = dynamic.tests.iter().filter(|t| t.stype == 1).collect();
         
         for test in tests {
-            // Level/Risk check (could be configurable via SqliConfig later)
             if test.level > 3 { continue; }
 
             for boundary in &dynamic.boundaries {
-                // Check if boundary clause matches test clause
+                // Clause compatibility
                 if !test.clause.is_empty() && !boundary.clause.is_empty() {
-                    let mut match_found = false;
-                    for tc in &test.clause {
-                        if boundary.clause.contains(tc) {
-                            match_found = true;
-                            break;
-                        }
+                    if !test.clause.iter().any(|tc| boundary.clause.contains(tc)) {
+                        continue;
                     }
-                    if !match_found { continue; }
                 }
 
-                // Check if boundary where matches test where
-                if !test.where_clause.is_empty() && !boundary.where_clause.is_empty() {
-                     let mut match_found = false;
-                     for tw in &test.where_clause {
-                         if boundary.where_clause.contains(tw) {
-                             match_found = true;
-                             break;
-                         }
-                     }
-                     if !match_found { continue; }
-                }
+                // Where compatibility — pick first common where bit
+                let where_bit = if test.where_clause.is_empty() || boundary.where_clause.is_empty() {
+                    1u8
+                } else {
+                    boundary.where_clause.iter()
+                        .find(|bw| test.where_clause.contains(bw))
+                        .copied()
+                        .unwrap_or(1)
+                };
 
-                // Prepare payloads based on sqlmap <request> logic
-                // [RANDNUM] -> 1234
-                // [PRIORITY] -> usually 1=1 or similar
-                let base_payload = test.request_payload
-                    .replace("[RANDNUM]", "42")
-                    .replace("[PRIORITY]", "1=1");
-                
-                let true_payload = self.apply_sqlmap_boundary(original_value, &base_payload, boundary);
-                
-                // For boolean blind, we need a FALSE pair.
-                // sqlmap XML usually doesn't have an explicit false payload for detection,
-                // it expects us to negate the [INFERENCE] or similar.
-                // For simplicity, we'll try to replace "1=1" with "1=2" in the final payload
-                // or similar common negations.
-                let false_payload = true_payload.replace("1=1", "1=2")
-                    .replace("=42", "=43")
-                    .replace(" IN (42)", " IN (43)");
+                let true_payload = self.apply_sqlmap_boundary(
+                    original_value, &test.request_payload, boundary, where_bit, "1=1"
+                );
+                let false_payload = self.apply_sqlmap_boundary(
+                    original_value, &test.request_payload, boundary, where_bit, "1=2"
+                );
 
                 if true_payload == false_payload { continue; }
 
@@ -109,17 +91,25 @@ impl SqliDetector {
         None
     }
 
-    fn apply_sqlmap_boundary(&self, original: &str, payload: &str, boundary: &crate::sqx::payload_fetcher::SqlmapBoundary) -> String {
-        let prefix = &boundary.prefix;
-        let suffix = &boundary.suffix;
-        
-        // sqlmap <where> logic:
-        // 1: Append to value: {val}{prefix}{payload}{suffix}
-        // 2: Inline: {prefix}{payload}{suffix} (replacing or ignoring val)
-        // 3: Replace value: {prefix}{payload}{suffix}
-        
-        // Default to append (1)
-        format!("{}{}{}{}", original, prefix, payload, suffix)
+    /// Apply sqlmap boundary respecting the <where> semantics.
+    /// where_bit: 1=append, 2=inline, 3=replace
+    fn apply_sqlmap_boundary(
+        &self,
+        original: &str,
+        payload_template: &str,
+        boundary: &crate::sqx::payload_fetcher::SqlmapBoundary,
+        where_bit: u8,
+        inference: &str,
+    ) -> String {
+        let prefix = DynamicPayloads::resolve_placeholders(&boundary.prefix, 42, "sqx", original, inference, 5);
+        let suffix = DynamicPayloads::resolve_placeholders(&boundary.suffix, 42, "sqx", original, inference, 5);
+        let payload = DynamicPayloads::resolve_placeholders(payload_template, 42, "sqx", original, inference, 5);
+
+        match where_bit {
+            2 => format!("{}{}{}", prefix, payload, suffix), // inline
+            3 => format!("{}{}{}", prefix, payload, suffix), // replace
+            _ => format!("{}{}{}{}", original, prefix, payload, suffix), // append (default)
+        }
     }
 
     /// Test a single TRUE/FALSE payload pair. Returns a finding if gap > 0.02.

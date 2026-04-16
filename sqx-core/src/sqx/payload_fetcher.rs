@@ -218,6 +218,29 @@ impl DynamicPayloads {
         out
     }
 
+    /// Resolve sqlmap placeholders in a string.
+    ///
+    /// Supported placeholders:
+    /// - `[RANDNUM]`  → random integer (default 42)
+    /// - `[RANDSTR]`  → random string (default "sqx")
+    /// - `[ORIGVALUE]` → the original parameter value
+    /// - `[INFERENCE]` → the boolean condition being tested
+    /// - `[SLEEPTIME]` → sleep duration in seconds
+    pub fn resolve_placeholders(
+        s: &str,
+        randnum: i32,
+        randstr: &str,
+        origvalue: &str,
+        inference: &str,
+        sleeptime: u64,
+    ) -> String {
+        s.replace("[RANDNUM]", &randnum.to_string())
+            .replace("[RANDSTR]", randstr)
+            .replace("[ORIGVALUE]", origvalue)
+            .replace("[INFERENCE]", inference)
+            .replace("[SLEEPTIME]", &sleeptime.to_string())
+    }
+
     /// Look up a boundary by its label or prefix.
     pub fn find_boundary(label: &str) -> Option<(String, String)> {
         for b in BOUNDARIES {

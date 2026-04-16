@@ -176,13 +176,15 @@ impl SqliDetector {
         for b in &dynamic.boundaries {
             if !is_numeric && b.prefix.is_empty() { continue; }
 
-            let payload = format!("{}{}{}{}", original_value, b.prefix, "1=1", b.suffix);
+            let prefix = DynamicPayloads::resolve_placeholders(&b.prefix, 42, "sqx", original_value, "1=1", 5);
+            let suffix = DynamicPayloads::resolve_placeholders(&b.suffix, 42, "sqx", original_value, "1=1", 5);
+            let payload = format!("{}{}{}{}", original_value, prefix, "1=1", suffix);
             if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
                 debug!(
                     "Discovered working dynamic boundary for time-based extraction: dyn:{}",
                     b.prefix
                 );
-                return Ok(Some((b.prefix.clone(), b.suffix.clone())));
+                return Ok(Some((prefix, suffix)));
             }
             tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
         }
@@ -221,20 +223,12 @@ impl SqliDetector {
         let time_tests: Vec<_> = dynamic.tests.iter().filter(|t| t.stype == 5).collect();
 
         for test in time_tests {
-            let suffix = &test.request_payload;
-            let payload = if suffix.contains("[INFERENCE]") {
-                let filled = suffix.replace("[INFERENCE]", "1=1").replace("[SLEEPTIME]", "5");
-                format!("{}{} AND {} {}", original_value, close, filled, balance)
-            } else {
-                format!("{}{} AND {} {}", original_value, close, suffix, balance)
-            };
+            let suffix = DynamicPayloads::resolve_placeholders(&test.request_payload, 42, "sqx", original_value, "1=1", sleep_secs);
+            let payload = format!("{}{} AND {} {}", original_value, close, suffix, balance);
             if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
                 debug!("Fetched time payload works: {}", test.title);
-                return if suffix.contains("[INFERENCE]") {
-                    format!("{}{} AND {} {}", original_value, close, suffix.replace("[INFERENCE]", "{}").replace("[SLEEPTIME]", "5"), balance)
-                } else {
-                    format!("{}{} AND {} {}", original_value, close, suffix, balance)
-                };
+                let template_suffix = DynamicPayloads::resolve_placeholders(&test.request_payload, 42, "sqx", original_value, "{}", sleep_secs);
+                return format!("{}{} AND {} {}", original_value, close, template_suffix, balance);
             }
             tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
         }
@@ -458,7 +452,7 @@ impl SqliDetector {
         let sleep_secs = self.sleep_duration_secs();
 
         let payload = if let Some(v) = vector {
-             v.replace("[INFERENCE]", condition).replace("[SLEEPTIME]", &sleep_secs.to_string())
+            DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, condition, sleep_secs)
         } else if time_template.contains("{}") {
             time_template.replace("{}", condition)
         } else {

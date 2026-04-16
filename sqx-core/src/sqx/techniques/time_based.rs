@@ -57,26 +57,55 @@ impl SqliDetector {
 
             for boundary in &dynamic.boundaries {
                 if !test.clause.is_empty() && !boundary.clause.is_empty() {
-                    let mut match_found = false;
-                    for tc in &test.clause {
-                        if boundary.clause.contains(tc) { match_found = true; break; }
+                    if !test.clause.iter().any(|tc| boundary.clause.contains(tc)) {
+                        continue;
                     }
-                    if !match_found { continue; }
                 }
 
-                let base_payload = test.request_payload
-                    .replace("[RANDNUM]", "42")
-                    .replace("[SLEEPTIME]", &sleep_secs.to_string());
-                
-                let payload = format!("{}{}{}{}", original_value, boundary.prefix, base_payload, boundary.suffix);
+                let where_bit = if test.where_clause.is_empty() || boundary.where_clause.is_empty() {
+                    1u8
+                } else {
+                    boundary.where_clause.iter()
+                        .find(|bw| test.where_clause.contains(bw))
+                        .copied()
+                        .unwrap_or(1)
+                };
 
-                if let Some(res) = self.try_time_payload(url, param, original_value, &payload, tamper, sleep_secs, threshold, None, Some(&test.title)).await {
+                let payload = self.apply_sqlmap_boundary_time(
+                    original_value, &test.request_payload, boundary, where_bit, sleep_secs
+                );
+
+                if let Some(res) = self.try_time_payload(
+                    url, param, original_value, &payload, tamper, sleep_secs, threshold,
+                    None, Some(&test.title)
+                ).await {
                     return Some(res);
                 }
             }
         }
 
         None
+    }
+
+    /// Apply sqlmap boundary for time-based tests respecting <where> semantics.
+    fn apply_sqlmap_boundary_time(
+        &self,
+        original: &str,
+        payload_template: &str,
+        boundary: &crate::sqx::payload_fetcher::SqlmapBoundary,
+        where_bit: u8,
+        sleep_secs: u64,
+    ) -> String {
+        use crate::sqx::payload_fetcher::DynamicPayloads;
+        let prefix = DynamicPayloads::resolve_placeholders(&boundary.prefix, 42, "sqx", original, "1=1", sleep_secs);
+        let suffix = DynamicPayloads::resolve_placeholders(&boundary.suffix, 42, "sqx", original, "1=1", sleep_secs);
+        let payload = DynamicPayloads::resolve_placeholders(payload_template, 42, "sqx", original, "1=1", sleep_secs);
+
+        match where_bit {
+            2 => format!("{}{}{}", prefix, payload, suffix),
+            3 => format!("{}{}{}", prefix, payload, suffix),
+            _ => format!("{}{}{}{}", original, prefix, payload, suffix),
+        }
     }
 
     async fn try_time_payload(

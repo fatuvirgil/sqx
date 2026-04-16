@@ -186,8 +186,11 @@ impl SqliDetector {
         for b in &dynamic.boundaries {
             if !is_numeric && b.prefix.is_empty() { continue; }
 
+            let prefix = DynamicPayloads::resolve_placeholders(&b.prefix, 42, "sqx", original_value, "1=1", 5);
+            let suffix = DynamicPayloads::resolve_placeholders(&b.suffix, 42, "sqx", original_value, "1=1", 5);
+
             if let Some(result) = self
-                .try_boolean_pair_blind(url, param, original_value, baseline, &b.prefix, &b.suffix)
+                .try_boolean_pair_blind(url, param, original_value, baseline, &prefix, &suffix)
                 .await
             {
                 if result {
@@ -195,7 +198,7 @@ impl SqliDetector {
                         "Discovered working dynamic boundary for blind extraction: dyn:{}",
                         b.prefix
                     );
-                    return Ok(Some((b.prefix.clone(), b.suffix.clone())));
+                    return Ok(Some((prefix, suffix)));
                 }
             }
             tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
@@ -415,8 +418,7 @@ impl SqliDetector {
         vector: Option<&str>,
     ) -> Result<bool> {
         let true_payload = if let Some(v) = vector {
-             v.replace("[INFERENCE]", condition)
-              .replace("[RANDNUM]", "42")
+            DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, condition, 5)
         } else {
             format!("{}{} AND ({}) {}", original_value, close, condition, balance)
         };
@@ -441,8 +443,17 @@ impl SqliDetector {
         // This costs 2 extra requests but is only triggered when similarity > 0.85,
         // which is when the simple threshold would be unreliable.
         if similarity > 0.85 {
-            let known_true_pl  = format!("{}{} AND 1=1 {}", original_value, close, balance);
-            let known_false_pl = format!("{}{} AND 1=2 {}", original_value, close, balance);
+            let (known_true_pl, known_false_pl) = if let Some(v) = vector {
+                (
+                    DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, "1=1", 5),
+                    DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, "1=2", 5),
+                )
+            } else {
+                (
+                    format!("{}{} AND 1=1 {}", original_value, close, balance),
+                    format!("{}{} AND 1=2 {}", original_value, close, balance),
+                )
+            };
 
             let true_url  = self.build_test_url(url, param, original_value, &known_true_pl);
             let false_url = self.build_test_url(url, param, original_value, &known_false_pl);
