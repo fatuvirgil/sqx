@@ -414,7 +414,7 @@ impl SqliDetector {
 
             let mid = low + (high - low) / 2;
 
-            let condition = format!("{} > {}", query, mid);
+            let condition = format!("({}) > {}", query, mid);
             let is_greater = self
                 .test_condition_time_based(
                     url, param, original_value, dbms, &condition,

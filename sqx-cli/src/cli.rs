@@ -264,6 +264,10 @@ enum Command {
         #[arg(long, default_value = "100")]
         max_rows: usize,
 
+        /// Request delay in ms (lower = faster extraction)
+        #[arg(long, default_value = "100")]
+        delay: u64,
+
         /// Output format: text, json, csv
         #[arg(long, default_value = "text")]
         output: String,
@@ -404,8 +408,8 @@ impl Cli {
                 let ai_cfg = build_ai_config(ai_advisor, &ai_model, ai_api_key.as_deref(), ai_base_url.as_deref(), ai_consent);
                 run_auto(url, smart, oob, oob_domain, max_pages, max_depth, output, out_file, param_wordlist, proxy, session, ai_cfg).await;
             }
-            Command::Dump { url, param, value, dbms, technique, max_rows, output, out_file } => {
-                run_dump(url, param, value, dbms, technique, max_rows, output, out_file, proxy, session).await;
+            Command::Dump { url, param, value, dbms, technique, max_rows, output, out_file, delay } => {
+                run_dump(url, param, value, dbms, technique, max_rows, output, out_file, proxy, session, delay).await;
             }
             Command::Batch { targets, concurrency, smart, tech, tamper, delay, timeout, output, out_file, param_wordlist } => {
                 run_batch(targets, concurrency, smart, tech, tamper, delay, timeout, output, out_file, param_wordlist, proxy, session).await;
@@ -844,6 +848,7 @@ async fn run_dump(
     out_file: Option<String>,
     proxy: Option<String>,
     session: Option<Arc<SessionManager>>,
+    delay: u64,
 ) {
     let blind_technique = match technique.to_lowercase().as_str() {
         "time" => BlindTechnique::Time,
@@ -852,6 +857,7 @@ async fn run_dump(
 
     let config = SqliConfig {
         proxy,
+        delay_ms: delay,
         ..SqliConfig::default()
     };
     let mut detector = match SqliDetector::with_config(config) {

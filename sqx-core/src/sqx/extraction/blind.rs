@@ -288,8 +288,6 @@ impl SqliDetector {
         progress_callback: Option<&Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>,
         cancel_token: Option<&CancellationToken>,
     ) -> Result<String> {
-        let mut result = String::new();
-
         let subquery = if let Some(ref custom) = config.custom_query {
             format!("({})", custom)
         } else {
@@ -308,7 +306,7 @@ impl SqliDetector {
 
         if let Some(token) = cancel_token
             && token.is_cancelled() {
-                return Ok(result);
+                return Ok(String::new());
             }
 
         let length_query = format!("LENGTH({})", subquery);
@@ -321,14 +319,24 @@ impl SqliDetector {
 
         info!("Row {} has length {}", row_index, length);
 
-        for pos in 1..=length {
-            if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    return Ok(result);
-                }
+        if length == 0 {
+            return Ok(String::new());
+        }
 
-            let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-            let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+        // Parallel character extraction with limited concurrency (8 chars at a time).
+        // Boolean-blind characters are independent, so this gives an ~8x speedup
+        // over the sequential approach.
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+        let mut set = tokio::task::JoinSet::new();
+        let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
+        let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+        let vector_owned = vector.map(|s| s.to_string());
+
+        for pos in 1..=length {
+            if cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+                break;
+            }
+
             let char_query = format!(
                 "{}({}({}, {}, 1))",
                 dialect.char_code_function(),
@@ -336,25 +344,50 @@ impl SqliDetector {
                 subquery,
                 pos
             );
-            let ascii_val = self
-                .extract_number_blind(
-                    url, param, original_value, &char_query, baseline,
-                    close, balance, vector, 0, 127, request_count, cancel_token,
-                )
-                .await?;
 
-            if let Some(ch) = char::from_u32(ascii_val as u32) {
-                result.push(ch);
-                if let Some(callback) = progress_callback {
-                    callback(BlindExtractionProgress {
-                        current_value_index: row_index,
-                        current_char_index: pos as usize,
-                        extracted_so_far: result.clone(),
-                        total_requests: *request_count,
-                        status: ExtractionStatus::Running,
-                    });
+            let detector = self.clone();
+            let permit = semaphore.clone().acquire_owned().await?;
+            let url = url.to_string();
+            let param = param.to_string();
+            let original_value = original_value.to_string();
+            let baseline = baseline.clone();
+            let close = close.to_string();
+            let balance = balance.to_string();
+            let vector = vector_owned.clone();
+
+            set.spawn(async move {
+                let _permit = permit;
+                let mut local_reqs = 0usize;
+                let ascii_val = detector.extract_number_blind(
+                    &url, &param, &original_value, &char_query, &baseline,
+                    &close, &balance, vector.as_deref(), 0, 127, &mut local_reqs,
+                    None, // short-lived task; cancellation checked before spawn
+                ).await?;
+                Ok::<_, anyhow::Error>((pos, ascii_val, local_reqs))
+            });
+        }
+
+        let mut bytes = vec![0u8; length as usize];
+        while let Some(res) = set.join_next().await {
+            let (pos, ascii_val, local_reqs) = res??;
+            let pos = pos as usize;
+            if pos > 0 && pos <= bytes.len() {
+                if let Some(ch) = char::from_u32(ascii_val as u32) {
+                    bytes[pos - 1] = ch as u8;
                 }
             }
+            *request_count += local_reqs;
+        }
+
+        let result = String::from_utf8_lossy(&bytes).to_string();
+        if let Some(callback) = progress_callback {
+            callback(BlindExtractionProgress {
+                current_value_index: row_index,
+                current_char_index: result.len(),
+                extracted_so_far: result.clone(),
+                total_requests: *request_count,
+                status: ExtractionStatus::Running,
+            });
         }
 
         Ok(result)
@@ -387,7 +420,7 @@ impl SqliDetector {
 
             let mid = low + (high - low) / 2;
 
-            let condition = format!("{} > {}", query, mid);
+            let condition = format!("({}) > {}", query, mid);
             let is_greater = self
                 .test_condition_blind(url, param, original_value, &condition, baseline, close, balance, vector)
                 .await?;

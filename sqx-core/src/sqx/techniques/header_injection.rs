@@ -34,6 +34,10 @@ const ERROR_PAYLOADS: &[&str] = &[
     "' OR '1'='1",
     "' OR 1=1--",
     "\" OR \"1\"=\"1",
+    "' AND (SELECT SLEEP(5)) --",
+    "' AND SLEEP(5) --",
+    "\" AND SLEEP(5) --",
+    "'; SELECT SLEEP(5) --",
 ];
 
 impl SqliDetector {

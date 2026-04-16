@@ -317,15 +317,33 @@ impl SqliDetector {
                         format!("{} OR 1=1-- ", original_value),
                     ),
                     (
+                        "numeric-or",
+                        format!("{} OR 1=1", original_value),
+                        format!("{} OR 1=2", original_value),
+                        format!("{} OR 1=1-- ", original_value),
+                    ),
+                    (
                         "single-quote",
                         format!("{}' AND '1'='1", original_value),
                         format!("{}' AND '1'='2", original_value),
                         format!("{}' OR '1'='1'-- ", original_value),
                     ),
                     (
+                        "single-quote-or",
+                        format!("{}' OR '1'='1", original_value),
+                        format!("{}' OR '1'='2", original_value),
+                        format!("{}' OR '1'='1'-- ", original_value),
+                    ),
+                    (
                         "double-quote",
                         format!("{}\" AND \"1\"=\"1", original_value),
                         format!("{}\" AND \"1\"=\"2", original_value),
+                        format!("{}\" OR \"1\"=\"1\"-- ", original_value),
+                    ),
+                    (
+                        "double-quote-or",
+                        format!("{}\" OR \"1\"=\"1", original_value),
+                        format!("{}\" OR \"1\"=\"2", original_value),
                         format!("{}\" OR \"1\"=\"1\"-- ", original_value),
                     ),
                 ]
@@ -338,15 +356,33 @@ impl SqliDetector {
                         format!("{}'-- ", original_value),
                     ),
                     (
+                        "single-quote-or",
+                        format!("{}' OR '1'='1", original_value),
+                        format!("{}' OR '1'='2", original_value),
+                        format!("{}' OR '1'='1'-- ", original_value),
+                    ),
+                    (
                         "double-quote",
                         format!("{}\" AND \"1\"=\"1", original_value),
                         format!("{}\" AND \"1\"=\"2", original_value),
                         format!("{}\"-- ", original_value),
                     ),
                     (
+                        "double-quote-or",
+                        format!("{}\" OR \"1\"=\"1", original_value),
+                        format!("{}\" OR \"1\"=\"2", original_value),
+                        format!("{}\" OR \"1\"=\"1\"-- ", original_value),
+                    ),
+                    (
                         "numeric",
                         format!("{} AND 1=1", original_value),
                         format!("{} AND 1=2", original_value),
+                        format!("{} OR 1=1-- ", original_value),
+                    ),
+                    (
+                        "numeric-or",
+                        format!("{} OR 1=1", original_value),
+                        format!("{} OR 1=2", original_value),
                         format!("{} OR 1=1-- ", original_value),
                     ),
                 ]
