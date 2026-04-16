@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  sqli-labs:
+    image: acgpiano/sqli-labs:latest
+    container_name: sqx_test_sqli_labs
+    ports:
+      - "8888:80"
+    networks:
+      - sqx_test_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/Less-1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: sqx_test_dvwa
+    ports:
+      - "8889:80"
+    environment:
+      - MYSQL_PASS=p@ssw0rd
+      - PHPIPAM_ADMIN_USER=admin
+      - PHPIPAM_ADMIN_PASS=password
+    networks:
+      - sqx_test_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/login.php"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+networks:
+  sqx_test_net:
+    driver: bridge

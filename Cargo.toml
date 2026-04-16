@@ -1,27 +1,25 @@
-[package]
-name = "sqx"
+[workspace]
+members = [
+    "sqx-core",
+    "sqx-cli",
+    "sqx-gui",
+]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
-description = "SQX — SQL Injection Scanner (standalone CLI + GUI)"
 authors = ["Intelexia Team"]
 edition = "2024"
 rust-version = "1.85"
 
-[[bin]]
-name = "sqx"
-path = "src/main.rs"
-
-[lib]
-name = "sqx_lib"
-path = "src/lib.rs"
-
-[dependencies]
+[workspace.dependencies]
 tokio        = { version = "1", features = ["full"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 anyhow       = "1"
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest      = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest      = { version = "0.12", features = ["json", "rustls-tls", "socks", "gzip", "deflate", "brotli"] }
 regex        = "1"
 uuid         = { version = "1", features = ["v4"] }
 chrono       = { version = "0.4", features = ["serde"] }
@@ -36,10 +34,4 @@ clap         = { version = "4", features = ["derive", "color"] }
 eframe       = { version = "0.30", features = ["default_fonts"] }
 egui         = "0.30"
 egui_extras  = "0.30"
-
-[profile.release]
-opt-level   = 3
-lto         = true
-codegen-units = 1
-strip       = true
-panic       = "abort"
+arboard      = "3"

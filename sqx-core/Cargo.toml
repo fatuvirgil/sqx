@@ -1,0 +1,32 @@
+[package]
+name = "sqx-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "SQX core engine — SQL injection detection and extraction"
+
+[dependencies]
+tokio        = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+anyhow       = { workspace = true }
+tracing      = { workspace = true }
+reqwest      = { workspace = true }
+regex        = { workspace = true }
+uuid         = { workspace = true }
+chrono       = { workspace = true }
+url          = { workspace = true }
+urlencoding  = { workspace = true }
+base64       = { workspace = true }
+lazy_static  = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait  = { workspace = true }
+axum         = { workspace = true }
+
+[profile.release]
+opt-level   = 3
+lto         = true
+codegen-units = 1
+strip       = true
+panic       = "abort"

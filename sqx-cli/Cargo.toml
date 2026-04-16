@@ -1,0 +1,18 @@
+[package]
+name = "sqx-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "SQX command-line interface"
+
+[[bin]]
+name = "sqx"
+path = "src/main.rs"
+
+[dependencies]
+sqx-core = { path = "../sqx-core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
