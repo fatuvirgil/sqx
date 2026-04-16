@@ -16,7 +16,7 @@ const CSRF_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 /// Update cookies from response headers via `update_from_response()`.
 /// CSRF tokens are auto-refreshed before each request if configured.
 pub struct SessionManager {
-    config: SessionConfig,
+    config: RwLock<SessionConfig>,
     /// Current CSRF token (refreshed automatically)
     csrf_token: RwLock<Option<String>>,
     /// Current cookies (updated from Set-Cookie headers)
@@ -31,7 +31,7 @@ impl SessionManager {
     pub fn new(config: SessionConfig) -> Self {
         let initial_cookies = config.cookies.clone();
         Self {
-            config,
+            config: RwLock::new(config),
             csrf_token: RwLock::new(None),
             cookies: RwLock::new(initial_cookies),
             runtime_headers: RwLock::new(HashMap::new()),
@@ -115,7 +115,8 @@ impl SessionManager {
         }
 
         // Apply static custom headers
-        for (name, value) in &self.config.headers {
+        let config = self.config.read().unwrap();
+        for (name, value) in &config.headers {
             b = b.header(name.as_str(), value.as_str());
         }
 
@@ -126,7 +127,7 @@ impl SessionManager {
         }
 
         // Apply CSRF token
-        if let Some(ref csrf_config) = self.config.csrf {
+        if let Some(ref csrf_config) = config.csrf {
             if let Some(ref token) = *self.csrf_token.read().unwrap() {
                 if let Some(ref header_name) = csrf_config.header_name {
                     b = b.header(header_name.as_str(), token.as_str());
@@ -159,18 +160,22 @@ impl SessionManager {
 
     /// Refresh CSRF token by fetching from token_url and extracting with regex.
     pub async fn refresh_csrf(&self, client: &Client) -> Result<()> {
-        let csrf_config = self.config.csrf.as_ref()
-            .ok_or_else(|| anyhow!("No CSRF config"))?;
-        let token_url = csrf_config.token_url.as_ref()
-            .ok_or_else(|| anyhow!("No CSRF token URL"))?;
-        let token_regex_str = csrf_config.token_regex.as_ref()
-            .ok_or_else(|| anyhow!("No CSRF token regex"))?;
+        let (token_url, token_regex_str) = {
+            let config = self.config.read().unwrap();
+            let csrf_config = config.csrf.as_ref()
+                .ok_or_else(|| anyhow!("No CSRF config"))?;
+            let token_url = csrf_config.token_url.clone()
+                .ok_or_else(|| anyhow!("No CSRF token URL"))?;
+            let token_regex_str = csrf_config.token_regex.clone()
+                .ok_or_else(|| anyhow!("No CSRF token regex"))?;
+            (token_url, token_regex_str)
+        };
 
-        let resp = self.apply(client.get(token_url)).send().await?;
+        let resp = self.apply(client.get(&token_url)).send().await?;
         self.update_from_response(&resp);
         let body = resp.text().await?;
 
-        let re = Regex::new(token_regex_str)?;
+        let re = Regex::new(&token_regex_str)?;
         if let Some(captures) = re.captures(&body) {
             if let Some(token) = captures.get(1) {
                 let mut csrf = self.csrf_token.write().unwrap();
@@ -188,11 +193,14 @@ impl SessionManager {
     /// Called before each request to guarantee a valid token.
     /// Only refreshes if `CSRF_REFRESH_INTERVAL` has elapsed.
     pub async fn maybe_refresh_csrf(&self, client: &Client) {
-        let csrf_config = self.config.csrf.as_ref();
-        let needs_token = csrf_config
-            .and_then(|c| c.token_url.as_ref())
-            .is_some()
-            && csrf_config.and_then(|c| c.token_regex.as_ref()).is_some();
+        let needs_token = {
+            let config = self.config.read().unwrap();
+            let csrf_config = config.csrf.as_ref();
+            csrf_config
+                .and_then(|c| c.token_url.as_ref())
+                .is_some()
+                && csrf_config.and_then(|c| c.token_regex.as_ref()).is_some()
+        };
 
         if !needs_token {
             return;
@@ -223,8 +231,11 @@ impl SessionManager {
     /// Perform auto-login using the configured auth method.
     /// After successful login, session cookies/headers are updated for subsequent requests.
     pub async fn login(&self, client: &Client) -> Result<()> {
-        let auth = self.config.auth.as_ref()
-            .ok_or_else(|| anyhow!("No auth config"))?;
+        let auth = {
+            let config = self.config.read().unwrap();
+            config.auth.clone()
+                .ok_or_else(|| anyhow!("No auth config"))?
+        };
 
         match auth.method.as_str() {
             "form" => {
@@ -346,12 +357,18 @@ impl SessionManager {
 
     /// Returns true if auto-detect is enabled.
     pub fn is_auto_detect_enabled(&self) -> bool {
-        self.config.auto_detect
+        self.config.read().unwrap().auto_detect
     }
 
     /// Returns true if an auth config is present.
     pub fn has_auth(&self) -> bool {
-        self.config.auth.is_some()
+        self.config.read().unwrap().auth.is_some()
+    }
+
+    /// Update authentication configuration.
+    pub fn update_auth_config(&self, auth: AuthConfig) {
+        let mut config = self.config.write().unwrap();
+        config.auth = Some(auth);
     }
 
     /// Insert multiple cookies into the jar.
@@ -364,7 +381,8 @@ impl SessionManager {
 
     /// Detect known session cookies from Set-Cookie headers.
     pub fn detect_session_cookies(&self, headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
-        let known = &self.config.known_cookie_names;
+        let config = self.config.read().unwrap();
+        let known = &config.known_cookie_names;
         let mut found = Vec::new();
         for h in headers.get_all("set-cookie") {
             if let Ok(v) = h.to_str() {

@@ -4,6 +4,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Type of form for second-order flow analysis
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FormType {
+    Registration,
+    Login,
+    ProfileUpdate,
+    GenericInput,
+}
+
+/// A candidate for second-order SQL injection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecondOrderCandidate {
+    pub source_url: String,
+    /// Parameters and values for the source form (e.g. registration)
+    pub source_form_data: HashMap<String, String>,
+    /// The page where the data is eventually executed/reflected
+    pub sink_url: String,
+    /// The parameter name in source_form_data that is the injection point
+    pub affected_param: String,
+    pub form_type: FormType,
+}
+
+/// Result of an auto-provisioning attempt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvisioningResult {
+    pub success: bool,
+    pub username: String,
+    pub password: String,
+    pub message: String,
+    /// The registration URL used
+    pub registration_url: String,
+}
+
 /// SQL Injection test result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqliTestResult {
@@ -118,6 +151,8 @@ pub enum SqliTechnique {
     UnionBased,
     StackedQueries,
     OutOfBand,
+    /// Second-order SQL injection (payload stored in DB, executed later)
+    SecondOrder,
     /// Server-side code injection (PHP eval, create_function, etc.) — not SQLi
     CodeInjection,
 }
@@ -131,6 +166,7 @@ impl std::fmt::Display for SqliTechnique {
             SqliTechnique::UnionBased => write!(f, "Union-based"),
             SqliTechnique::StackedQueries => write!(f, "Stacked queries"),
             SqliTechnique::OutOfBand => write!(f, "Out-of-band"),
+            SqliTechnique::SecondOrder => write!(f, "Second-order"),
             SqliTechnique::CodeInjection => write!(f, "Code Injection"),
         }
     }

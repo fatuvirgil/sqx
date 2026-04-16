@@ -13,6 +13,7 @@ use reqwest::Client;
 use tracing::{debug, info, warn};
 
 use super::models::{CrawlResult, CrawlerConfig, DiscoveredParam, HttpMethod, InjectionPoint, ParamLocation};
+use crate::sqx::models::FormType;
 
 // ── Lazy-compiled regexes (avoids re-compilation on every page) ─────────────
 
@@ -214,6 +215,7 @@ impl Spider {
                         parameters: params,
                         found_on: url.clone(),
                         content_type: None,
+                        form_type: Some(FormType::GenericInput),
                     });
                 }
             }
@@ -326,6 +328,7 @@ impl Spider {
             }
 
             if !params.is_empty() {
+                let form_type = self.detect_form_type(form_body, &params);
                 points.push(InjectionPoint {
                     url: form_url,
                     method: http_method,
@@ -334,11 +337,46 @@ impl Spider {
                     content_type: Some(
                         "application/x-www-form-urlencoded".to_string(),
                     ),
+                    form_type: Some(form_type),
                 });
             }
         }
 
         points
+    }
+
+    fn detect_form_type(&self, html: &str, params: &[DiscoveredParam]) -> FormType {
+        let text = html.to_lowercase();
+        let param_names: HashSet<String> = params.iter().map(|p| p.name.to_lowercase()).collect();
+
+        // Registration heuristics: confirm password or register keywords
+        if param_names.contains("confirm_password") 
+            || param_names.contains("password_confirm") 
+            || param_names.contains("repassword")
+            || text.contains("create account") 
+            || text.contains("sign up") 
+            || text.contains("register")
+        {
+            return FormType::Registration;
+        }
+
+        // Login heuristics: username/password and login keywords
+        if (param_names.contains("username") || param_names.contains("user") || param_names.contains("email") || param_names.contains("login"))
+            && (param_names.contains("password") || param_names.contains("pass") || param_names.contains("pwd"))
+        {
+            return FormType::Login;
+        }
+
+        // Profile update heuristics
+        if text.contains("update profile") 
+            || text.contains("save changes") 
+            || text.contains("edit profile")
+            || text.contains("my account")
+        {
+            return FormType::ProfileUpdate;
+        }
+
+        FormType::GenericInput
     }
 
     /// Extract `href` links from `<a>` and `<area>` tags for BFS queueing.

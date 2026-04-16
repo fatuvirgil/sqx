@@ -51,6 +51,7 @@ pub use fingerprint::{
 pub use session::{SessionConfig, CsrfConfig, AuthConfig, SessionManager};
 
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Simple scan function for Tauri command
@@ -171,6 +172,75 @@ pub async fn auto_scan(
                 }
             }
             Err(e) => warn!("Param-fuzz scan failed for {}: {}", page_url, e),
+        }
+    }
+
+    // Phase 4: Second-order detection & Auto-provisioning
+    info!("Phase 4: Second-order SQL injection discovery");
+    
+    // 1. Find registration forms
+    let reg_forms: Vec<_> = crawl.injection_points.iter()
+        .filter(|p| p.form_type == Some(models::FormType::Registration))
+        .collect();
+
+    for reg_point in reg_forms {
+        // 2. Auto-provision test user
+        if let Ok(provision) = detector.auto_provision(reg_point).await {
+            if provision.success {
+                // 3. Configure session with these credentials for subsequent discovery
+                let mut auth_config = session::AuthConfig {
+                    login_url: String::new(),
+                    method: "form".to_string(),
+                    credentials: std::collections::HashMap::new(),
+                    basic_username: None,
+                    basic_password: None,
+                    bearer_token: None,
+                    success_indicator: None,
+                };
+                
+                // Find a login form to use these credentials
+                let login_point = crawl.injection_points.iter()
+                    .find(|p| p.form_type == Some(models::FormType::Login));
+                
+                if let Some(lp) = login_point {
+                    auth_config.login_url = lp.url.clone();
+                    for param in &lp.parameters {
+                        let val = match param.name.to_lowercase().as_str() {
+                            "username" | "user" | "login" => Some(provision.username.clone()),
+                            "password" | "pass" | "pwd" => Some(provision.password.clone()),
+                            _ => None,
+                        };
+                        if let Some(v) = val {
+                            auth_config.credentials.insert(param.name.clone(), v);
+                        }
+                    }
+
+                    // Attach session to a dedicated discovery detector
+                    let sess_mgr = Arc::new(session::SessionManager::new(session::SessionConfig {
+                        auth: Some(auth_config),
+                        ..Default::default()
+                    }));
+                    
+                    let discovery_detector = detector.clone().with_session(sess_mgr);
+                    if let Ok(_) = discovery_detector.ensure_authenticated().await {
+                        // 4. Discover candidates
+                        let candidates = discovery_detector.discover_second_order_candidates(&crawl, &provision).await;
+                        for candidate in candidates {
+                            // 5. Test each candidate
+                            let second_order_results = discovery_detector.test_second_order(&candidate).await;
+                            if !second_order_results.is_empty() {
+                                all_results.push(pipeline::PipelineResult::new(
+                                    second_order_results,
+                                    None,
+                                    1,
+                                    discovery_detector.request_count(),
+                                    0.0,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -386,6 +386,7 @@ impl SarifReport {
             SqliTechnique::UnionBased     => ("SQX004", "error"),
             SqliTechnique::StackedQueries => ("SQX005", "error"),
             SqliTechnique::OutOfBand      => ("SQX006", "error"),
+            SqliTechnique::SecondOrder    => ("SQX008", "error"),
             SqliTechnique::CodeInjection  => ("SQX007", "error"),
         }
     }
@@ -399,6 +400,7 @@ impl SarifReport {
             "SQX005" => 4,
             "SQX006" => 5,
             "SQX007" => 6,
+            "SQX008" => 7,
             _ => 0,
         }
     }

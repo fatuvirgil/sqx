@@ -1,6 +1,7 @@
 //! Crawler data models — injection points discovered during HTML crawling.
 
 use serde::{Deserialize, Serialize};
+use crate::sqx::models::FormType;
 
 /// A discovered injection point ready for SQX scanning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +16,8 @@ pub struct InjectionPoint {
     pub found_on: String,
     /// Content-Type for POST requests (e.g. `application/x-www-form-urlencoded`).
     pub content_type: Option<String>,
+    /// Heuristic classification of the form type.
+    pub form_type: Option<FormType>,
 }
 
 /// HTTP method for an injection point.

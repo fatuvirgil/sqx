@@ -345,6 +345,7 @@ impl SqliDetector {
                 pos
             );
 
+            let char_query = char_query.clone();
             let detector = self.clone();
             let permit = semaphore.clone().acquire_owned().await?;
             let url = url.to_string();

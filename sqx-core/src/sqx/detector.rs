@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use reqwest::Client;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -943,6 +943,7 @@ impl SqliDetector {
                     SqliTechnique::UnionBased => Severity::Critical,
                     SqliTechnique::StackedQueries => Severity::Critical,
                     SqliTechnique::OutOfBand => Severity::High,
+                    SqliTechnique::SecondOrder => Severity::Critical,
                     SqliTechnique::CodeInjection => Severity::Critical,
                 },
                 confidence: if result.confidence > 0.9 {
@@ -1264,10 +1265,218 @@ impl SqliDetector {
             SqliTechnique::OutOfBand => {
                 self.test_out_of_band(url, &param.name, &param.original_value, tamper).await
             }
+            SqliTechnique::SecondOrder => {
+                // Second-order injection is handled via the dedicated auto-scan phase,
+                // not through per-parameter technique testing.
+                None
+            }
             SqliTechnique::CodeInjection => {
                 self.test_code_injection(url, &param.name, &param.original_value).await
             }
         }
+    }
+
+    /// Attempt to automatically create a test account using a discovered registration form.
+    pub async fn auto_provision(
+        &self,
+        point: &super::crawler::models::InjectionPoint,
+    ) -> Result<super::models::ProvisioningResult> {
+        if point.form_type != Some(super::models::FormType::Registration) {
+            return Err(anyhow!("Injection point is not a registration form"));
+        }
+
+        let test_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let username = format!("sqx_test_{}", test_id);
+        let password = format!("SQX_Pass_{}!", test_id);
+        let email = format!("{}@sqx-test.local", username);
+
+        let mut form_data = HashMap::new();
+        for param in &point.parameters {
+            let val = match param.name.to_lowercase().as_str() {
+                "username" | "user" | "login" | "nickname" => username.clone(),
+                "password" | "pass" | "pwd" | "repassword" | "confirm_password" | "password_confirm" => password.clone(),
+                "email" | "e-mail" | "mail" => email.clone(),
+                "fullname" | "name" | "first_name" | "last_name" => "SQX Security Test".to_string(),
+                "captcha" => "1234".to_string(), // guess
+                _ => param.default_value.clone().unwrap_or_else(|| "1".to_string()),
+            };
+            form_data.insert(param.name.clone(), val);
+        }
+
+        info!("Attempting auto-provisioning on {}: user={}", point.url, username);
+
+        let body = form_data.iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+
+        let resp = self.send_post_request(&point.url, body, "application/x-www-form-urlencoded").await?;
+
+        // Heuristics for success: 302 redirect or "success" strings
+        let success = resp.status == 302 
+            || resp.body.to_lowercase().contains("success") 
+            || resp.body.to_lowercase().contains("account created")
+            || resp.body.to_lowercase().contains("registered");
+
+        if success {
+            info!("Auto-provisioning successful! Creds: {}:{}", username, password);
+        } else {
+            warn!("Auto-provisioning failed (status {}). Response: {}", resp.status, resp.body.chars().take(100).collect::<String>());
+        }
+
+        Ok(super::models::ProvisioningResult {
+            success,
+            username,
+            password,
+            message: if success { "Account created".to_string() } else { "Failed to create account".to_string() },
+            registration_url: point.url.clone(),
+        })
+    }
+
+    /// Discover second-order candidates by injecting unique markers and looking for reflection.
+    pub async fn discover_second_order_candidates(
+        &self,
+        crawl: &super::crawler::models::CrawlResult,
+        provision: &super::models::ProvisioningResult,
+    ) -> Vec<super::models::SecondOrderCandidate> {
+        let mut candidates = Vec::new();
+        if !provision.success { return candidates; }
+
+        // 1. Identify "source" forms (registration, profile update)
+        let sources: Vec<_> = crawl.injection_points.iter()
+            .filter(|p| matches!(p.form_type, Some(super::models::FormType::Registration) | Some(super::models::FormType::ProfileUpdate)))
+            .collect();
+
+        // 2. Identify "sink" pages (visited pages that might show the data)
+        let sinks = &crawl.visited_pages;
+
+        for source in sources {
+            for param in &source.parameters {
+                // Only test string-like parameters for reflection
+                if matches!(param.input_type.as_deref(), Some("password") | Some("hidden")) { continue; }
+
+                let marker = format!("SQX_REFLECT_{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+                let mut form_data = HashMap::new();
+                
+                // Fill form data, injecting marker in the current parameter
+                for p in &source.parameters {
+                    let val = if p.name == param.name {
+                        marker.clone()
+                    } else if p.name.to_lowercase().contains("user") || p.name.to_lowercase() == "login" {
+                        provision.username.clone()
+                    } else if p.name.to_lowercase().contains("pass") {
+                        provision.password.clone()
+                    } else {
+                        p.default_value.clone().unwrap_or_else(|| "1".to_string())
+                    };
+                    form_data.insert(p.name.clone(), val);
+                }
+
+                // Submit form
+                let body = form_data.iter()
+                    .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                
+                let _ = self.send_post_request(&source.url, body, "application/x-www-form-urlencoded").await;
+
+                // 3. Visit sinks and look for marker
+                for sink_url in sinks {
+                    if let Ok(resp) = self.send_request(sink_url).await {
+                        if resp.body.contains(&marker) {
+                            debug!("Found second-order reflection! Source: {} (param: {}), Sink: {}", source.url, param.name, sink_url);
+                            candidates.push(super::models::SecondOrderCandidate {
+                                source_url: source.url.clone(),
+                                source_form_data: form_data.clone(),
+                                sink_url: sink_url.clone(),
+                                affected_param: param.name.clone(),
+                                form_type: source.form_type.clone().unwrap_or(super::models::FormType::GenericInput),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        candidates
+    }
+
+    /// Test a second-order candidate for SQL injection.
+    pub async fn test_second_order(
+        &self,
+        candidate: &super::models::SecondOrderCandidate,
+    ) -> Vec<SqliTestResult> {
+        let mut results = Vec::new();
+        info!("Testing second-order SQLi: Source={} Sink={}", candidate.source_url, candidate.sink_url);
+
+        // Baseline on Sink
+        let baseline = match self.send_request(&candidate.sink_url).await {
+            Ok(r) => r,
+            Err(_) => return results,
+        };
+
+        // 1. Time-based probe
+        let sleep_secs = self.sleep_duration_secs();
+        let time_payload = format!("' AND SLEEP({})-- ", sleep_secs);
+        
+        // Inject into Source
+        let mut data = candidate.source_form_data.clone();
+        data.insert(candidate.affected_param.clone(), format!("sqx_test{}", time_payload));
+        let body = data.iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        
+        let _ = self.send_post_request(&candidate.source_url, body, "application/x-www-form-urlencoded").await;
+
+        // Check Sink for delay
+        let start = Instant::now();
+        if let Ok(_) = self.send_request(&candidate.sink_url).await {
+            let duration = start.elapsed();
+            if duration.as_secs() >= sleep_secs {
+                info!("Second-order Time-based SQLi found on sink: {}", candidate.sink_url);
+                results.push(SqliTestResult {
+                    parameter: candidate.affected_param.clone(),
+                    technique: SqliTechnique::SecondOrder,
+                    confidence: 0.9,
+                    payload: time_payload,
+                    evidence: format!("Sink page delayed by {}s", duration.as_secs()),
+                    dbms_hint: None,
+                    injection_context: None,
+                    payload_id: None,
+                });
+            }
+        }
+
+        // 2. Error-based probe
+        let error_payload = "'";
+        let mut data = candidate.source_form_data.clone();
+        data.insert(candidate.affected_param.clone(), format!("sqx_test{}", error_payload));
+        let body = data.iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        
+        let _ = self.send_post_request(&candidate.source_url, body, "application/x-www-form-urlencoded").await;
+
+        // Check Sink for errors
+        if let Ok(resp) = self.send_request(&candidate.sink_url).await {
+            if let Some(error_msg) = detect_sql_error(&resp.body) {
+                info!("Second-order Error-based SQLi found on sink: {}", candidate.sink_url);
+                results.push(SqliTestResult {
+                    parameter: candidate.affected_param.clone(),
+                    technique: SqliTechnique::SecondOrder,
+                    confidence: 0.95,
+                    payload: error_payload.to_string(),
+                    evidence: format!("SQL error reflected on sink: {}", error_msg),
+                    dbms_hint: None,
+                    injection_context: None,
+                    payload_id: None,
+                });
+            }
+        }
+
+        results
     }
 
     /// Test AI-suggested payloads against the target parameter.
@@ -1322,8 +1531,8 @@ impl SqliDetector {
                             payload: payload.clone(),
                             evidence: format!("[AI] {}", evidence),
                             dbms_hint: None,
-                        injection_context: None,
-                        payload_id: None,
+                            injection_context: None,
+                            payload_id: None,
                         });
 
                     }
@@ -1337,8 +1546,8 @@ impl SqliDetector {
                             payload: payload.clone(),
                             evidence: format!("[AI] Response delayed {}ms (threshold {}s)", elapsed.as_millis(), sleep_threshold),
                             dbms_hint: None,
-                        injection_context: None,
-                        payload_id: None,
+                            injection_context: None,
+                            payload_id: None,
                         });
 
                     }
@@ -1354,14 +1563,14 @@ impl SqliDetector {
                                 payload: payload.clone(),
                                 evidence: format!("[AI] Response length changed: {} → {}", base.body.len(), resp.body.len()),
                                 dbms_hint: None,
-                        injection_context: None,
-                        payload_id: None,
-                        });
+                                injection_context: None,
+                                payload_id: None,
+                            });
 
                         }
                     }
                 }
-                SqliTechnique::OutOfBand => {} // handled separately via OOB server
+                SqliTechnique::OutOfBand | SqliTechnique::SecondOrder => {}
                 SqliTechnique::CodeInjection => {} // detected via probe, not AI payloads
             }
         }
