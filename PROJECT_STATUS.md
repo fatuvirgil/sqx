@@ -2,7 +2,7 @@
 
 **Data:** 2026-04-15  
 **Codebase:** ~14,500 linii Rust  
-**Binary:** `target/release/sqx` (~9MB, zero dependențe externe)  
+**Binary:** `target/release/sqx` (~9MB, self-contained executable — ships as a single file)  
 **Build:** ✅ `Finished release` — zero erori
 
 ---
@@ -86,7 +86,7 @@
 
 - **Built-in boundaries**: 23 contexte de injecție (independent written)
 - **Built-in PATT payloads**: ~50 payloads curate (MIT license, bundled)
-- **Integrare sqlmap (GPLv2)**: Suport complet pentru `boundaries.xml` și toate testele (`stype` 1-5). Motorul procesează dinamic clauzele `<clause>` și `<where>` și folosește `<vector>` cu placeholder `[INFERENCE]` pentru extracție de date stabilă.
+- **Integrare sqlmap (GPLv2)**: Mecanism de integrare `boundaries.xml` + `payloads.xml` complet implementat (clause/where/vector parsing, placeholder resolution). Coverage efectiv ~5% din sqlmap — vezi [`tests/payload_audit.md`](tests/payload_audit.md) pentru harta detaliată a gap-urilor.
 - **Fetch la runtime**: `sqx update-payloads` descarcă bazele externe (GPLv2, user fetch).
 - **Param wordlist extinsă**: ~100 params default (SecLists style), suport `--param-wordlist <file>`
 - Cache în `~/.local/share/sqx/payloads/`
@@ -233,7 +233,7 @@
 
 | Gap | Impact |
 |-----|--------|
-| **Coverage payload database < 5% din sqlmap** | sqlmap are mii de payload-uri testate în sute de edge-case-uri. Integrarea cu sqlmap XML nu e completă în `blind.rs` și `dump`. |
+| **Coverage payload database ~5% din sqlmap** | sqlmap are mii de payload-uri testate în sute de edge-case-uri. Vezi [`tests/payload_audit.md`](tests/payload_audit.md). |
 | **Post-exploitation avansată** | Sqlmap oferă `--os-shell`, `--sql-shell`, `--file-read/write`, UDF injection, Metasploit integration. SQX are doar payload database. |
 | **Crawler rudimentar** | Regex-based HTML parsing. Nu urmărește JS, SPA routing, AJAX, API endpoints din JavaScript. |
 | **Databases exotice — structuri goale** | FrontBase, MonetDb, Virtuoso, mSQL au doar skeletons fără `sleep_function` sau extragere reală. |
@@ -341,9 +341,9 @@
 
 **NU mai adăugăm:** AI-first adaptive detection, Team server, Visual attack tree, Auto-remediation.
 **Focus exclusiv:**
-1. Integrare completă sqlmap payloads (boundaries + contexts)
+1. ✅ Integrare completă sqlmap payloads (boundaries + contexts)
 2. SQL shell + OS shell interactiv (parity cu sqlmap)
-3. Workspace modularizare (`sqx-core`, `sqx-cli`, `sqx-gui`)
+3. ✅ Workspace modularizare (`sqx-core`, `sqx-cli`, `sqx-gui`)
 4. Headless browser crawler (înlocuiește regex-based)
 
 **Concluzie:** Fără test coverage robust și payload parity, SQX rămâne un POC elegant. Vom închide parity-ul înainte de orice altceva.
