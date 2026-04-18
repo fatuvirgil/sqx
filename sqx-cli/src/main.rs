@@ -5,6 +5,7 @@ use clap::Parser;
 
 mod cli;
 mod commands;
+mod startup;
 
 /// Display authorization warning and wait for user acknowledgment.
 fn check_authorization() {
@@ -37,5 +38,9 @@ fn check_authorization() {
 #[tokio::main]
 async fn main() {
     check_authorization();
+    
+    // Run startup checks (version, payloads, CVEs)
+    startup::run_startup_checks().await;
+    
     cli::Cli::parse().run().await;
 }
