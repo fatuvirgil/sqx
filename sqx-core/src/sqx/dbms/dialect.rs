@@ -22,7 +22,9 @@ pub trait DbmsDialect: Send + Sync {
     /// Optional type-cast wrappers for union extraction when the printable
     /// column is of a non-string type (e.g. numeric). Use `%s` as the
     /// expression placeholder.
-    fn union_type_cast_wrappers(&self) -> Vec<&'static str> { vec![] }
+    fn union_type_cast_wrappers(&self) -> Vec<&'static str> {
+        vec![]
+    }
 
     // ── Schema enumeration ────────────────────────────────────────────────────
 
@@ -35,10 +37,14 @@ pub trait DbmsDialect: Send + Sync {
 
     /// Returns the DBMS sleep expression, e.g. `SLEEP(3)` or `pg_sleep(3)`.
     /// Returns an empty string for engines without a native sleep primitive.
-    fn sleep_function(&self, _seconds: u64) -> String { String::new() }
+    fn sleep_function(&self, _seconds: u64) -> String {
+        String::new()
+    }
 
     /// Conditional sleep: execute the delay only when `condition` is TRUE.
-    fn conditional_sleep(&self, _condition: &str, _seconds: u64) -> String { String::new() }
+    fn conditional_sleep(&self, _condition: &str, _seconds: u64) -> String {
+        String::new()
+    }
 
     // ── Stacked queries ───────────────────────────────────────────────────────
 
@@ -62,13 +68,26 @@ pub trait DbmsDialect: Send + Sync {
         }
     }
 
+    // ── Error-based blind ────────────────────────────────────────────────────
+
+    /// Error-based injection payloads that force the DBMS to raise an error
+    /// containing the result of an expression. Returns vector of (payload_template, description).
+    /// Use `%s` as placeholder for the expression to extract.
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![]
+    }
+
     // ── Blind extraction helpers ──────────────────────────────────────────────
 
     /// Function name for getting ASCII/unicode value of a character.
     /// Default is `ASCII`; SQLite overrides with `unicode`.
-    fn char_code_function(&self) -> &'static str { "ASCII" }
+    fn char_code_function(&self) -> &'static str {
+        "ASCII"
+    }
 
     /// Function name for substring extraction.
     /// Default is `SUBSTRING`; SQLite overrides with `substr`.
-    fn substring_function(&self) -> &'static str { "SUBSTRING" }
+    fn substring_function(&self) -> &'static str {
+        "SUBSTRING"
+    }
 }

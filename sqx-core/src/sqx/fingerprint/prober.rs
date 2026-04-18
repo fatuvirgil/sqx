@@ -49,8 +49,7 @@ impl TargetProber {
         let dbms_hint = self.detect_dbms_hint(url, &behavior).await?;
 
         // 6. Build strategy from all observations
-        let strategy =
-            Self::build_strategy(&timing, &behavior, &waf, &dbms_hint);
+        let strategy = Self::build_strategy(&timing, &behavior, &waf, &dbms_hint);
 
         let probe_count = 3 + 4 + 3 + parameters.len() + 2; // approximate
 
@@ -105,7 +104,7 @@ impl TargetProber {
         // Request 1: Normal request (baseline)
         let normal = self.get(url).await?;
 
-        // Request 2: Add a garbage parameter (?_sqx_probe=1) — verifies 
+        // Request 2: Add a garbage parameter (?_sqx_probe=1) — verifies
         // parameter handling behavior (response intentionally discarded)
         let _garbage_url = if url.contains('?') {
             format!("{}&_sqx_probe=1", url)
@@ -120,8 +119,7 @@ impl TargetProber {
             .await;
 
         // Request 4: Send a single quote as param value
-        let quote_resp =
-            self.send_modified_param(url, |_| "'".to_string()).await;
+        let quote_resp = self.send_modified_param(url, |_| "'".to_string()).await;
 
         let reflects_errors = quote_resp
             .as_ref()
@@ -140,8 +138,10 @@ impl TargetProber {
             .map(|r| r.body.contains("AAAA"))
             .unwrap_or(false);
 
-        let invalid_status =
-            invalid_resp.as_ref().map(|r| r.status).unwrap_or(normal.status);
+        let invalid_status = invalid_resp
+            .as_ref()
+            .map(|r| r.status)
+            .unwrap_or(normal.status);
 
         let redirects_on_error = invalid_resp
             .as_ref()
@@ -151,8 +151,7 @@ impl TargetProber {
         let content_varies = invalid_resp
             .as_ref()
             .map(|r| {
-                let len_diff =
-                    (normal.body.len() as i64 - r.body.len() as i64).abs();
+                let len_diff = (normal.body.len() as i64 - r.body.len() as i64).abs();
                 len_diff > 50 || normal.status != r.status
             })
             .unwrap_or(false);
@@ -199,16 +198,12 @@ impl TargetProber {
             let probe_url = self.inject_first_param(url, payload);
             match self.get(&probe_url).await {
                 Ok(resp) => {
-                    if let Some(waf) =
-                        self.identify_waf_from_response(&resp)
-                    {
+                    if let Some(waf) = self.identify_waf_from_response(&resp) {
                         return Ok(Some(waf));
                     }
                 }
                 Err(_) => {
-                    debug!(
-                        "Connection failed on WAF probe — possible network-level WAF"
-                    );
+                    debug!("Connection failed on WAF probe — possible network-level WAF");
                 }
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -225,38 +220,126 @@ impl TargetProber {
         // Define WAF signatures: (body_pattern, waf_name, recommended_tampers)
         let signatures: Vec<(&str, &str, Vec<&str>)> = vec![
             // Cloudflare
-            ("cloudflare", "Cloudflare", vec!["randomcase", "urlencode", "space_to_comment"]),
-            ("cf-ray", "Cloudflare", vec!["randomcase", "urlencode", "space_to_comment"]),
-            ("__cfduid", "Cloudflare", vec!["randomcase", "urlencode", "space_to_comment"]),
+            (
+                "cloudflare",
+                "Cloudflare",
+                vec!["randomcase", "urlencode", "space_to_comment"],
+            ),
+            (
+                "cf-ray",
+                "Cloudflare",
+                vec!["randomcase", "urlencode", "space_to_comment"],
+            ),
+            (
+                "__cfduid",
+                "Cloudflare",
+                vec!["randomcase", "urlencode", "space_to_comment"],
+            ),
             // Akamai
-            ("akamaighost", "Akamai", vec!["double_urlencode", "randomcase", "mysql_version_comment"]),
-            ("akamai", "Akamai", vec!["double_urlencode", "randomcase", "mysql_version_comment"]),
-            ("kona site defender", "Akamai (Kona)", vec!["double_urlencode", "randomcase", "mysql_version_comment"]),
+            (
+                "akamaighost",
+                "Akamai",
+                vec!["double_urlencode", "randomcase", "mysql_version_comment"],
+            ),
+            (
+                "akamai",
+                "Akamai",
+                vec!["double_urlencode", "randomcase", "mysql_version_comment"],
+            ),
+            (
+                "kona site defender",
+                "Akamai (Kona)",
+                vec!["double_urlencode", "randomcase", "mysql_version_comment"],
+            ),
             // AWS WAF
-            ("awswaf", "AWS WAF", vec!["urlencode", "space_to_tab", "inline_comment"]),
-            ("request blocked", "AWS WAF", vec!["urlencode", "space_to_tab", "inline_comment"]),
+            (
+                "awswaf",
+                "AWS WAF",
+                vec!["urlencode", "space_to_tab", "inline_comment"],
+            ),
+            (
+                "request blocked",
+                "AWS WAF",
+                vec!["urlencode", "space_to_tab", "inline_comment"],
+            ),
             // ModSecurity
-            ("modsecurity", "ModSecurity", vec!["space_to_comment", "randomcase", "hex_encode"]),
-            ("mod_security", "ModSecurity", vec!["space_to_comment", "randomcase", "hex_encode"]),
+            (
+                "modsecurity",
+                "ModSecurity",
+                vec!["space_to_comment", "randomcase", "hex_encode"],
+            ),
+            (
+                "mod_security",
+                "ModSecurity",
+                vec!["space_to_comment", "randomcase", "hex_encode"],
+            ),
             // Imperva/Incapsula
-            ("incapsula", "Imperva", vec!["double_urlencode", "unicode_escape", "space_to_newline"]),
-            ("imperva", "Imperva", vec!["double_urlencode", "unicode_escape", "space_to_newline"]),
-            ("_incap_", "Imperva", vec!["double_urlencode", "unicode_escape", "space_to_newline"]),
+            (
+                "incapsula",
+                "Imperva",
+                vec!["double_urlencode", "unicode_escape", "space_to_newline"],
+            ),
+            (
+                "imperva",
+                "Imperva",
+                vec!["double_urlencode", "unicode_escape", "space_to_newline"],
+            ),
+            (
+                "_incap_",
+                "Imperva",
+                vec!["double_urlencode", "unicode_escape", "space_to_newline"],
+            ),
             // Sucuri
-            ("sucuri", "Sucuri", vec!["randomcase", "space_to_comment", "urlencode"]),
-            ("x-sucuri-id", "Sucuri", vec!["randomcase", "space_to_comment", "urlencode"]),
+            (
+                "sucuri",
+                "Sucuri",
+                vec!["randomcase", "space_to_comment", "urlencode"],
+            ),
+            (
+                "x-sucuri-id",
+                "Sucuri",
+                vec!["randomcase", "space_to_comment", "urlencode"],
+            ),
             // F5 BIG-IP ASM
-            ("big-ip", "F5 BIG-IP", vec!["double_urlencode", "space_to_tab", "null_byte"]),
-            ("f5 networks", "F5 BIG-IP", vec!["double_urlencode", "space_to_tab", "null_byte"]),
+            (
+                "big-ip",
+                "F5 BIG-IP",
+                vec!["double_urlencode", "space_to_tab", "null_byte"],
+            ),
+            (
+                "f5 networks",
+                "F5 BIG-IP",
+                vec!["double_urlencode", "space_to_tab", "null_byte"],
+            ),
             // Barracuda
-            ("barracuda", "Barracuda", vec!["urlencode", "space_to_comment", "randomcase"]),
+            (
+                "barracuda",
+                "Barracuda",
+                vec!["urlencode", "space_to_comment", "randomcase"],
+            ),
             // Fortinet/FortiWeb
-            ("fortigate", "FortiWeb", vec!["urlencode", "randomcase", "inline_comment"]),
-            ("fortiweb", "FortiWeb", vec!["urlencode", "randomcase", "inline_comment"]),
+            (
+                "fortigate",
+                "FortiWeb",
+                vec!["urlencode", "randomcase", "inline_comment"],
+            ),
+            (
+                "fortiweb",
+                "FortiWeb",
+                vec!["urlencode", "randomcase", "inline_comment"],
+            ),
             // DenyAll
-            ("denyall", "DenyAll", vec!["double_urlencode", "space_to_comment"]),
+            (
+                "denyall",
+                "DenyAll",
+                vec!["double_urlencode", "space_to_comment"],
+            ),
             // Citrix NetScaler
-            ("netscaler", "Citrix NetScaler", vec!["urlencode", "randomcase"]),
+            (
+                "netscaler",
+                "Citrix NetScaler",
+                vec!["urlencode", "randomcase"],
+            ),
             ("ns_af", "Citrix NetScaler", vec!["urlencode", "randomcase"]),
         ];
 
@@ -269,10 +352,7 @@ impl TargetProber {
                     confidence: 0.85,
                     block_status: status,
                     block_signature: Some(pattern.to_string()),
-                    recommended_tampers: tampers
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
+                    recommended_tampers: tampers.iter().map(|s| s.to_string()).collect(),
                 });
             }
         }
@@ -322,8 +402,7 @@ impl TargetProber {
         }
 
         // Time-based as fallback — skip if timing jitter is too high
-        let skip_time_based =
-            timing.stddev_response > Duration::from_millis(2000);
+        let skip_time_based = timing.stddev_response > Duration::from_millis(2000);
         if !skip_time_based {
             technique_order.push("TimeBased".to_string());
         }
@@ -403,14 +482,10 @@ impl TargetProber {
         match self.get(&probe_url).await {
             Ok(resp) => {
                 let body_lower = resp.body.to_lowercase();
-                if body_lower.contains("mysql")
-                    || body_lower.contains("mariadb")
-                {
+                if body_lower.contains("mysql") || body_lower.contains("mariadb") {
                     return Ok(Some("MySQL".to_string()));
                 }
-                if body_lower.contains("postgresql")
-                    || body_lower.contains("pg_")
-                {
+                if body_lower.contains("postgresql") || body_lower.contains("pg_") {
                     return Ok(Some("PostgreSQL".to_string()));
                 }
                 if body_lower.contains("microsoft sql")
@@ -419,9 +494,7 @@ impl TargetProber {
                 {
                     return Ok(Some("MSSQL".to_string()));
                 }
-                if body_lower.contains("ora-")
-                    || body_lower.contains("oracle")
-                {
+                if body_lower.contains("ora-") || body_lower.contains("oracle") {
                     return Ok(Some("Oracle".to_string()));
                 }
                 if body_lower.contains("sqlite") {
@@ -451,24 +524,18 @@ impl TargetProber {
 
             // Test if modifying this parameter changes output
             let test_value = if is_numeric {
-                format!(
-                    "{}",
-                    value.parse::<i64>().unwrap_or(0) + 99999
-                )
+                format!("{}", value.parse::<i64>().unwrap_or(0) + 99999)
             } else {
                 format!("{}sqxprobe", value)
             };
 
-            let modified_url =
-                self.replace_param(url, name, &test_value);
+            let modified_url = self.replace_param(url, name, &test_value);
             let modified_resp = self.get(&modified_url).await.ok();
 
             let influences_output = modified_resp
                 .as_ref()
                 .map(|r| {
-                    let size_diff =
-                        (baseline.body.len() as i64 - r.body.len() as i64)
-                            .abs();
+                    let size_diff = (baseline.body.len() as i64 - r.body.len() as i64).abs();
                     size_diff > 50 || baseline.status != r.status
                 })
                 .unwrap_or(false);
@@ -542,8 +609,7 @@ impl TargetProber {
             return None;
         }
 
-        let modified_url =
-            self.replace_param(url, &params[0].0, &transform(&params[0].1));
+        let modified_url = self.replace_param(url, &params[0].0, &transform(&params[0].1));
         self.get(&modified_url).await.ok()
     }
 

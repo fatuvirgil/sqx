@@ -49,10 +49,7 @@ impl MarkdownReport {
             "| Vulnerabilities found | {} |\n",
             result.findings.len()
         ));
-        md.push_str(&format!(
-            "| Duration | {:.1}s |\n",
-            result.elapsed_secs
-        ));
+        md.push_str(&format!("| Duration | {:.1}s |\n", result.elapsed_secs));
         md.push_str(&format!(
             "| Total requests | {} |\n\n",
             result.total_requests
@@ -117,7 +114,10 @@ impl MarkdownReport {
     }
 
     /// Generate a lightweight Markdown report from raw findings without pipeline context.
-    pub fn from_findings(findings: &[crate::sqx::models::SqliTestResult], target_url: &str) -> String {
+    pub fn from_findings(
+        findings: &[crate::sqx::models::SqliTestResult],
+        target_url: &str,
+    ) -> String {
         let mut md = String::with_capacity(2048);
         md.push_str("# SQX SQL Injection Findings\n\n");
         md.push_str(&format!("**Target:** `{}`\n\n", target_url));
@@ -135,7 +135,10 @@ impl MarkdownReport {
                 finding.technique,
                 finding.parameter
             ));
-            md.push_str(&format!("- **Confidence:** {:.0}%\n", finding.confidence * 100.0));
+            md.push_str(&format!(
+                "- **Confidence:** {:.0}%\n",
+                finding.confidence * 100.0
+            ));
             if let Some(ref dbms) = finding.dbms_hint {
                 md.push_str(&format!("- **DBMS:** {}\n", dbms));
             }
@@ -162,7 +165,10 @@ impl MarkdownReport {
     pub fn from_batch(batch: &[(String, Vec<crate::sqx::models::SqliTestResult>)]) -> String {
         let mut md = String::with_capacity(4096);
         md.push_str("# SQX Batch Scan Report\n\n");
-        md.push_str(&format!("**Date:** {}\n\n", Utc::now().format("%Y-%m-%d %H:%M UTC")));
+        md.push_str(&format!(
+            "**Date:** {}\n\n",
+            Utc::now().format("%Y-%m-%d %H:%M UTC")
+        ));
 
         let total: usize = batch.iter().map(|(_, f)| f.len()).sum();
         let vuln_targets = batch.iter().filter(|(_, f)| !f.is_empty()).count();
@@ -176,7 +182,9 @@ impl MarkdownReport {
         }
 
         for (url, findings) in batch {
-            if findings.is_empty() { continue; }
+            if findings.is_empty() {
+                continue;
+            }
             md.push_str(&format!("## {}\n\n", url));
             md.push_str(&format!("**Findings:** {}\n\n", findings.len()));
             for (i, f) in findings.iter().enumerate() {

@@ -4,7 +4,7 @@
 //!
 //! Graceful degradation: any error silently falls back to static payloads.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -19,7 +19,11 @@ pub enum AiBackend {
     /// Anthropic Claude API — commercial, requires consent + API key.
     Claude { api_key: String, model: String },
     /// OpenAI-compatible API (OpenAI, Mistral, LM Studio, etc.).
-    OpenAiCompat { base_url: String, api_key: String, model: String },
+    OpenAiCompat {
+        base_url: String,
+        api_key: String,
+        model: String,
+    },
 }
 
 impl Default for AiBackend {
@@ -35,15 +39,11 @@ impl AiBackend {
     /// Parse a `provider:model` string into a backend variant.
     /// Commercial backends require a non-empty `api_key`.
     pub fn from_str(spec: &str, api_key: Option<&str>, base_url: Option<&str>) -> Result<Self> {
-        let (provider, model) = spec
-            .split_once(':')
-            .unwrap_or(("ollama", spec));
+        let (provider, model) = spec.split_once(':').unwrap_or(("ollama", spec));
 
         match provider.to_lowercase().as_str() {
             "ollama" => Ok(AiBackend::Ollama {
-                base_url: base_url
-                    .unwrap_or("http://localhost:11434")
-                    .to_string(),
+                base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
                 model: model.to_string(),
             }),
             "claude" => {
@@ -66,13 +66,19 @@ impl AiBackend {
                     model: model.to_string(),
                 })
             }
-            other => Err(anyhow!("Unknown AI provider '{}'. Use ollama, claude, or openai.", other)),
+            other => Err(anyhow!(
+                "Unknown AI provider '{}'. Use ollama, claude, or openai.",
+                other
+            )),
         }
     }
 
     /// Returns true if this backend sends data to a third-party commercial service.
     pub fn is_commercial(&self) -> bool {
-        matches!(self, AiBackend::Claude { .. } | AiBackend::OpenAiCompat { .. })
+        matches!(
+            self,
+            AiBackend::Claude { .. } | AiBackend::OpenAiCompat { .. }
+        )
     }
 }
 
@@ -130,9 +136,13 @@ pub struct AiSuggestedPayload {
 /// Query Ollama for installed models. Returns empty vec on error (Ollama not running).
 pub async fn list_ollama_models(base_url: &str) -> Vec<String> {
     #[derive(Deserialize)]
-    struct Tags { models: Vec<ModelEntry> }
+    struct Tags {
+        models: Vec<ModelEntry>,
+    }
     #[derive(Deserialize)]
-    struct ModelEntry { name: String }
+    struct ModelEntry {
+        name: String,
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -140,11 +150,11 @@ pub async fn list_ollama_models(base_url: &str) -> Vec<String> {
         .unwrap_or_default();
 
     match client.get(format!("{}/api/tags", base_url)).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json::<Tags>().await
-                .map(|t| t.models.into_iter().map(|m| m.name).collect())
-                .unwrap_or_default()
-        }
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<Tags>()
+            .await
+            .map(|t| t.models.into_iter().map(|m| m.name).collect())
+            .unwrap_or_default(),
         _ => vec![],
     }
 }
@@ -205,9 +215,11 @@ impl AiAdvisor {
             AiBackend::Claude { api_key, model } => {
                 call_claude(&self.client, api_key, model, &prompt).await
             }
-            AiBackend::OpenAiCompat { base_url, api_key, model } => {
-                call_openai_compat(&self.client, base_url, api_key, model, &prompt).await
-            }
+            AiBackend::OpenAiCompat {
+                base_url,
+                api_key,
+                model,
+            } => call_openai_compat(&self.client, base_url, api_key, model, &prompt).await,
         }
     }
 }
@@ -220,7 +232,7 @@ impl AiAdvisor {
 /// removes template markers that could alter the instruction structure.
 fn sanitize_prompt_field(s: &str, max_len: usize) -> String {
     s.chars()
-        .filter(|c| !c.is_control() || *c == '\n')  // keep newlines, drop other controls
+        .filter(|c| !c.is_control() || *c == '\n') // keep newlines, drop other controls
         .take(max_len)
         .collect::<String>()
         // Remove characters that could break out of the JSON-like prompt structure
@@ -230,13 +242,22 @@ fn sanitize_prompt_field(s: &str, max_len: usize) -> String {
 
 fn build_prompt(ctx: &TargetContext, max: usize) -> String {
     // Sanitize all fields that originate from target responses or user input.
-    let param  = sanitize_prompt_field(&ctx.parameter, 100);
-    let ptype  = sanitize_prompt_field(&ctx.param_type, 50);
-    let dbms   = ctx.dbms_hint.as_deref().map(|s| sanitize_prompt_field(s, 50))
+    let param = sanitize_prompt_field(&ctx.parameter, 100);
+    let ptype = sanitize_prompt_field(&ctx.param_type, 50);
+    let dbms = ctx
+        .dbms_hint
+        .as_deref()
+        .map(|s| sanitize_prompt_field(s, 50))
         .unwrap_or_else(|| "unknown".to_string());
-    let waf    = ctx.waf_name.as_deref().map(|s| sanitize_prompt_field(s, 100))
+    let waf = ctx
+        .waf_name
+        .as_deref()
+        .map(|s| sanitize_prompt_field(s, 100))
         .unwrap_or_else(|| "none".to_string());
-    let error  = ctx.error_snippet.as_deref().map(|s| sanitize_prompt_field(s, 300))
+    let error = ctx
+        .error_snippet
+        .as_deref()
+        .map(|s| sanitize_prompt_field(s, 300))
         .unwrap_or_else(|| "none".to_string());
     let technique = sanitize_prompt_field(&ctx.technique, 50);
 
@@ -300,7 +321,11 @@ async fn call_ollama(
         response: String,
     }
 
-    let req = Req { model, prompt, stream: false };
+    let req = Req {
+        model,
+        prompt,
+        stream: false,
+    };
     let resp = client
         .post(format!("{}/api/generate", base_url))
         .json(&req)
@@ -328,16 +353,26 @@ async fn call_claude(
         messages: Vec<Msg<'a>>,
     }
     #[derive(Serialize)]
-    struct Msg<'a> { role: &'a str, content: &'a str }
+    struct Msg<'a> {
+        role: &'a str,
+        content: &'a str,
+    }
     #[derive(Deserialize)]
-    struct Resp { content: Vec<Block> }
+    struct Resp {
+        content: Vec<Block>,
+    }
     #[derive(Deserialize)]
-    struct Block { text: String }
+    struct Block {
+        text: String,
+    }
 
     let req = Req {
         model,
         max_tokens: 2048,
-        messages: vec![Msg { role: "user", content: prompt }],
+        messages: vec![Msg {
+            role: "user",
+            content: prompt,
+        }],
     };
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
@@ -373,20 +408,37 @@ async fn call_openai_compat(
         response_format: Fmt,
     }
     #[derive(Serialize)]
-    struct Msg<'a> { role: &'a str, content: &'a str }
+    struct Msg<'a> {
+        role: &'a str,
+        content: &'a str,
+    }
     #[derive(Serialize)]
-    struct Fmt { #[serde(rename = "type")] kind: &'static str }
+    struct Fmt {
+        #[serde(rename = "type")]
+        kind: &'static str,
+    }
     #[derive(Deserialize)]
-    struct Resp { choices: Vec<Choice> }
+    struct Resp {
+        choices: Vec<Choice>,
+    }
     #[derive(Deserialize)]
-    struct Choice { message: RespMsg }
+    struct Choice {
+        message: RespMsg,
+    }
     #[derive(Deserialize)]
-    struct RespMsg { content: String }
+    struct RespMsg {
+        content: String,
+    }
 
     let req = Req {
         model,
-        messages: vec![Msg { role: "user", content: prompt }],
-        response_format: Fmt { kind: "json_object" },
+        messages: vec![Msg {
+            role: "user",
+            content: prompt,
+        }],
+        response_format: Fmt {
+            kind: "json_object",
+        },
     };
     let mut builder = client
         .post(format!("{}/v1/chat/completions", base_url))
@@ -403,7 +455,11 @@ async fn call_openai_compat(
     }
 
     let body: Resp = resp.json().await?;
-    let text = body.choices.first().map(|c| c.message.content.as_str()).unwrap_or("");
+    let text = body
+        .choices
+        .first()
+        .map(|c| c.message.content.as_str())
+        .unwrap_or("");
     parse_payload_json(text)
 }
 
@@ -461,5 +517,8 @@ fn parse_payload_json(raw: &str) -> Result<Vec<AiSuggestedPayload>> {
     let payloads: Vec<AiSuggestedPayload> = serde_json::from_str(json_str)
         .map_err(|e| anyhow!("Failed to parse AI payload JSON: {}", e))?;
 
-    Ok(payloads.into_iter().filter(|p| !p.payload.is_empty()).collect())
+    Ok(payloads
+        .into_iter()
+        .filter(|p| !p.payload.is_empty())
+        .collect())
 }

@@ -1,7 +1,7 @@
 //! Crawler data models — injection points discovered during HTML crawling.
 
-use serde::{Deserialize, Serialize};
 use crate::sqx::models::FormType;
+use serde::{Deserialize, Serialize};
 
 /// A discovered injection point ready for SQX scanning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +74,10 @@ pub struct CrawlerConfig {
     pub delay_ms: u64,
     /// URL patterns (regex) to skip.
     pub exclude_patterns: Vec<String>,
+    /// Note: Headless browser is a Pro feature.
+    /// In Core, this flag is ignored and regex-based crawler is always used.
+    pub headless: bool,
+    // Headless config is Pro-only: pub headless_config: Option<super::headless::HeadlessConfig>,
 }
 
 impl Default for CrawlerConfig {
@@ -89,6 +93,8 @@ impl Default for CrawlerConfig {
                 r"(?i)\.(jpg|jpeg|png|gif|svg|css|js|ico|woff|woff2|ttf|eot|map|min\.js|min\.css)(\?[^#]*)?$".to_string(),
                 r"(?i)(logout|signout|disconnect)".to_string(),
             ],
+            headless: false,
+            // headless_config: None,  // Pro-only
         }
     }
 }

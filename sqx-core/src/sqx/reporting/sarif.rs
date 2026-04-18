@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use crate::sqx::{
-    models::{SqliTestResult, SqliTechnique},
+    models::{SqliTechnique, SqliTestResult},
     pipeline::models::PipelineResult,
 };
 
@@ -296,7 +296,10 @@ impl SarifReport {
     pub(crate) fn finding_to_result(finding: &SqliTestResult, url: &str) -> Value {
         let (rule_id, level) = Self::technique_meta(&finding.technique);
         let encoded_payload = Self::encode_for_curl(&finding.payload);
-        let curl_cmd = format!("curl -s '{}' --data-urlencode '{}={}'", url, finding.parameter, encoded_payload);
+        let curl_cmd = format!(
+            "curl -s '{}' --data-urlencode '{}={}'",
+            url, finding.parameter, encoded_payload
+        );
 
         serde_json::json!({
             "ruleId": rule_id,
@@ -380,14 +383,14 @@ impl SarifReport {
 
     fn technique_meta(technique: &SqliTechnique) -> (&'static str, &'static str) {
         match technique {
-            SqliTechnique::ErrorBased     => ("SQX001", "error"),
-            SqliTechnique::BooleanBlind   => ("SQX002", "error"),
-            SqliTechnique::TimeBased      => ("SQX003", "error"),
-            SqliTechnique::UnionBased     => ("SQX004", "error"),
+            SqliTechnique::ErrorBased => ("SQX001", "error"),
+            SqliTechnique::BooleanBlind => ("SQX002", "error"),
+            SqliTechnique::TimeBased => ("SQX003", "error"),
+            SqliTechnique::UnionBased => ("SQX004", "error"),
             SqliTechnique::StackedQueries => ("SQX005", "error"),
-            SqliTechnique::OutOfBand      => ("SQX006", "error"),
-            SqliTechnique::SecondOrder    => ("SQX008", "error"),
-            SqliTechnique::CodeInjection  => ("SQX007", "error"),
+            SqliTechnique::OutOfBand => ("SQX006", "error"),
+            SqliTechnique::SecondOrder => ("SQX008", "error"),
+            SqliTechnique::CodeInjection => ("SQX007", "error"),
         }
     }
 

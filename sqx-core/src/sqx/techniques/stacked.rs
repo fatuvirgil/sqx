@@ -7,7 +7,7 @@ use tracing::{debug, info};
 use crate::sqx::{
     detector::SqliDetector,
     evasion::tamper_chain::TamperChain,
-    models::{SqliTestResult, SqliTechnique},
+    models::{SqliTechnique, SqliTestResult},
 };
 
 impl SqliDetector {
@@ -35,17 +35,27 @@ impl SqliDetector {
                 continue;
             }
 
-            let effective = tamper.map(|t| t.apply(&payload)).unwrap_or_else(|| payload.clone());
+            let effective = tamper
+                .map(|t| t.apply(&payload))
+                .unwrap_or_else(|| payload.clone());
             let test_url = self.build_test_url(url, param, original_value, &effective);
 
             let start = std::time::Instant::now();
-            match timeout(Duration::from_secs(10 + sleep_secs), self.send_request(&test_url)).await {
+            match timeout(
+                Duration::from_secs(10 + sleep_secs),
+                self.send_request(&test_url),
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     let duration = start.elapsed();
                     // Use half the sleep duration as headroom
                     let detection_threshold = threshold + Duration::from_secs(sleep_secs / 2);
                     if duration > detection_threshold {
-                        info!("Stacked queries SQL injection found! DBMS: {}", dialect.name());
+                        info!(
+                            "Stacked queries SQL injection found! DBMS: {}",
+                            dialect.name()
+                        );
                         return Some(SqliTestResult {
                             parameter: param.to_string(),
                             technique: SqliTechnique::StackedQueries,
@@ -76,7 +86,11 @@ impl SqliDetector {
                 }
             }
 
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         None

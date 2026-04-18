@@ -4,6 +4,7 @@
 //! and returns [`InjectionPoint`] structs ready for SQX scanning.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -12,8 +13,11 @@ use regex::Regex;
 use reqwest::Client;
 use tracing::{debug, info, warn};
 
-use super::models::{CrawlResult, CrawlerConfig, DiscoveredParam, HttpMethod, InjectionPoint, ParamLocation};
+use super::models::{
+    CrawlResult, CrawlerConfig, DiscoveredParam, HttpMethod, InjectionPoint, ParamLocation,
+};
 use crate::sqx::models::FormType;
+use crate::sqx::session::SessionManager;
 
 // ── Lazy-compiled regexes (avoids re-compilation on every page) ─────────────
 
@@ -64,11 +68,22 @@ pub struct Spider {
     client: Client,
     config: CrawlerConfig,
     user_agent: String,
+    session: Option<Arc<SessionManager>>,
 }
 
 impl Spider {
     pub fn new(client: Client, config: CrawlerConfig, user_agent: String) -> Self {
-        Self { client, config, user_agent }
+        Self {
+            client,
+            config,
+            user_agent,
+            session: None,
+        }
+    }
+
+    pub fn with_session(mut self, session: Arc<SessionManager>) -> Self {
+        self.session = Some(session);
+        self
     }
 
     /// Crawl from `start_url` and return injection points plus all visited page URLs.
@@ -128,14 +143,18 @@ impl Spider {
             );
 
             // Fetch page
-            let resp = match self
+            if let Some(ref session) = self.session {
+                session.maybe_refresh_csrf(&self.client).await;
+            }
+            let mut builder = self
                 .client
                 .get(&url)
                 .header("User-Agent", &self.user_agent)
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await
-            {
+                .timeout(Duration::from_secs(10));
+            if let Some(ref session) = self.session {
+                builder = session.apply(builder);
+            }
+            let resp = match builder.send().await {
                 Ok(r) => r,
                 Err(e) => {
                     if visited.len() == 1 {
@@ -147,6 +166,15 @@ impl Spider {
                     continue;
                 }
             };
+            if let Some(ref session) = self.session {
+                session.update_from_response(&resp);
+                if !session.is_authenticated() && session.is_auto_detect_enabled() {
+                    let detected = session.detect_session_cookies(resp.headers());
+                    if !detected.is_empty() {
+                        session.insert_cookies(&detected);
+                    }
+                }
+            }
 
             // Re-validate after redirects (same-domain + scheme check).
             if self.config.same_domain_only {
@@ -178,7 +206,10 @@ impl Spider {
             if content_type.to_lowercase().contains("html") || content_type.is_empty() {
                 // Record this as a visited HTML page (strip query string).
                 let clean_url = reqwest::Url::parse(&final_url)
-                    .map(|mut u| { u.set_query(None); u.to_string() })
+                    .map(|mut u| {
+                        u.set_query(None);
+                        u.to_string()
+                    })
                     .unwrap_or_else(|_| final_url.clone());
                 if !visited_pages.contains(&clean_url) {
                     visited_pages.push(clean_url);
@@ -229,7 +260,10 @@ impl Spider {
             injection_points.len()
         );
 
-        Ok(CrawlResult { injection_points, visited_pages })
+        Ok(CrawlResult {
+            injection_points,
+            visited_pages,
+        })
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
@@ -334,9 +368,7 @@ impl Spider {
                     method: http_method,
                     parameters: params,
                     found_on: page_url.to_string(),
-                    content_type: Some(
-                        "application/x-www-form-urlencoded".to_string(),
-                    ),
+                    content_type: Some("application/x-www-form-urlencoded".to_string()),
                     form_type: Some(form_type),
                 });
             }
@@ -350,26 +382,31 @@ impl Spider {
         let param_names: HashSet<String> = params.iter().map(|p| p.name.to_lowercase()).collect();
 
         // Registration heuristics: confirm password or register keywords
-        if param_names.contains("confirm_password") 
-            || param_names.contains("password_confirm") 
+        if param_names.contains("confirm_password")
+            || param_names.contains("password_confirm")
             || param_names.contains("repassword")
-            || text.contains("create account") 
-            || text.contains("sign up") 
+            || text.contains("create account")
+            || text.contains("sign up")
             || text.contains("register")
         {
             return FormType::Registration;
         }
 
         // Login heuristics: username/password and login keywords
-        if (param_names.contains("username") || param_names.contains("user") || param_names.contains("email") || param_names.contains("login"))
-            && (param_names.contains("password") || param_names.contains("pass") || param_names.contains("pwd"))
+        if (param_names.contains("username")
+            || param_names.contains("user")
+            || param_names.contains("email")
+            || param_names.contains("login"))
+            && (param_names.contains("password")
+                || param_names.contains("pass")
+                || param_names.contains("pwd"))
         {
             return FormType::Login;
         }
 
         // Profile update heuristics
-        if text.contains("update profile") 
-            || text.contains("save changes") 
+        if text.contains("update profile")
+            || text.contains("save changes")
             || text.contains("edit profile")
             || text.contains("my account")
         {
@@ -453,7 +490,11 @@ mod tests {
     use reqwest::Client;
 
     fn make_spider() -> Spider {
-        Spider::new(Client::new(), CrawlerConfig::default(), "test/1.0".to_string())
+        Spider::new(
+            Client::new(),
+            CrawlerConfig::default(),
+            "test/1.0".to_string(),
+        )
     }
 
     #[test]
@@ -491,7 +532,11 @@ mod tests {
         let points = spider.extract_injection_points(html, "http://example.com/");
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].method, HttpMethod::Post);
-        let names: Vec<&str> = points[0].parameters.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = points[0]
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"username"));
         assert!(names.contains(&"password"));
         assert!(names.contains(&"role"));

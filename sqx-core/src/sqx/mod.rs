@@ -1,54 +1,71 @@
 //! SQX — SQL Injection Detection & Exploitation Engine
 //! Re-exports all public types from sub-modules.
 
-pub mod models;
-pub mod http;
-pub mod similarity;
-pub mod stealth;
-pub mod payload_fetcher;
-pub mod detector;
-pub mod techniques;
-pub mod extraction;
-pub mod evasion;
-pub mod payloads;
-pub mod dbms;
-pub mod fingerprint;
-pub mod session;
-pub mod pipeline;
-pub mod reporting;
-pub mod crawler;
 pub mod ai_advisor;
+pub mod ai_payloads;
+pub mod basic_scan;
+pub mod crawler;
+pub mod dbms;
+pub mod detector;
+pub mod evasion;
+pub mod extraction;
+pub mod findings;
+pub mod fingerprint;
+pub mod http;
+pub mod info;
+pub mod models;
+pub mod param_scan;
+pub mod payloads;
+pub mod request;
+pub mod pipeline;
+pub mod post_scan;
+pub mod reporting;
+// Note: Second-order detection moved to sqx-pro
+// pub mod second_order;
+pub mod session;
+pub mod similarity;
+pub mod smart_scan;
+pub mod stealth;
+pub mod shell;
+pub mod takeover;
+pub mod techniques;
+pub mod url_utils;
 
 // ── Public re-exports ────────────────────────────────────────────────────────
 #[allow(unused_imports)]
-pub use models::{
-    SqliTestResult, SqliTechnique, SqliConfig, SqliInfoExtraction,
-    BlindExtractionResult, BlindExtractionProgress, ExtractionState, ExtractionStatus,
-    CancellationToken, BlindExtractionConfig, BlindTechnique,
-    SchemaEnumerationConfig, SchemaEnumerationProgress,
-    UnionExtractedData, HttpResponse,
-};
+pub use dbms::{DbmsDialect, all_dialects, dialect_by_name};
 #[allow(unused_imports)]
-pub use detector::SqliDetector;
+pub use detector::{OobServer, SqliDetector};
 #[allow(unused_imports)]
 pub use evasion::tamper::TamperScript;
 #[allow(unused_imports)]
 pub use evasion::tamper_chain::TamperChain;
 #[allow(unused_imports)]
-pub use payloads::PayloadDatabase;
-#[allow(unused_imports)]
-pub use extraction::file_read::{FileReadPayload, FileReadResult, FileReadPayloads};
-#[allow(unused_imports)]
-pub use extraction::os_exec::{OsExecPayload, OsExecResult, OsCommandPayloads};
-#[allow(unused_imports)]
-pub use dbms::{DbmsDialect, all_dialects, dialect_by_name};
-#[allow(unused_imports)]
 pub use fingerprint::{
-    TargetProfile, WafFingerprint, ScanStrategy, TargetBehavior,
-    TimingProfile, ParameterProfile, TargetProber,
+    ParameterProfile, ScanStrategy, TargetBehavior, TargetProber, TargetProfile, TimingProfile,
+    WafFingerprint,
 };
 #[allow(unused_imports)]
-pub use session::{SessionConfig, CsrfConfig, AuthConfig, SessionManager};
+pub use models::{
+    BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult, BlindTechnique,
+    CancellationToken, ExtractionState, ExtractionStatus, HttpResponse, SchemaEnumerationConfig,
+    SchemaEnumerationProgress, SqliConfig, SqliInfoExtraction, SqliTechnique, SqliTestResult,
+    UnionExtractedData,
+};
+#[allow(unused_imports)]
+pub use payloads::PayloadDatabase;
+#[allow(unused_imports)]
+pub use session::{AuthConfig, CsrfConfig, SessionConfig, SessionManager};
+#[allow(unused_imports)]
+pub use shell::{
+    detect_os_shell_methods, OsShell, OsShellMethod, ShellConfig, ShellHistoryEntry,
+    ShellResult, ShellSession, ShellTechnique, SqlShell,
+};
+pub use takeover::{
+    CustomSqlRequest, CustomSqlResult, FileReadPayload, FileReadPayloads, FileReadResult,
+    FileWritePayload, FileWritePayloads, FileWriteResult, OsCommandPayloads, OsExecPayload,
+    OsExecResult,
+};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -77,12 +94,17 @@ pub async fn auto_scan(
     let crawler_config = crawler_config.unwrap_or_default();
     let pipeline_config = pipeline_config.unwrap_or_default();
 
-    // Phase 1: Crawl
+    // Phase 1: Crawl using regex-based spider
     let spider = crawler::Spider::new(
         detector.client.clone(),
         crawler_config,
         detector.config.user_agent.clone(),
     );
+    let spider = if let Some(ref session) = detector.session {
+        spider.with_session(session.clone())
+    } else {
+        spider
+    };
     let crawl = spider.crawl(start_url).await?;
     info!(
         "Discovered {} injection points across {} pages",
@@ -90,18 +112,78 @@ pub async fn auto_scan(
         crawl.visited_pages.len()
     );
 
+    // Phase 2+: Run scan phases
+    run_scan_phases(detector, crawl, pipeline_config).await
+}
+
+/// Full automatic scan using headless browser for SPA support.
+///
+/// This variant uses Chrome/CDP to execute JavaScript and discover
+/// injection points in dynamic SPAs (React, Vue, Angular, etc.).
+///
+/// Falls back to regex-based spider if Chrome is not available.
+///
+/// # Arguments
+/// * `start_url`        — Entry point for the crawler.
+/// * `detector`         — Pre-configured `SqliDetector`.
+/// * `crawler_config`   — Crawler settings including headless config.
+/// * `pipeline_config`  — Pipeline settings.
+pub async fn auto_scan_headless(
+    start_url: &str,
+    detector: SqliDetector,
+    crawler_config: Option<crawler::CrawlerConfig>,
+    pipeline_config: Option<pipeline::PipelineConfig>,
+) -> Result<Vec<pipeline::PipelineResult>> {
+    let crawler_config = crawler_config.unwrap_or_default();
+    let pipeline_config = pipeline_config.unwrap_or_default();
+
+    // Note: Headless crawler is Pro-only feature
+    // In Core, we always use the regex-based spider
+    if crawler_config.headless {
+        warn!("Headless crawler is a Pro feature. Using regex-based crawler. Upgrade to SQX Pro for SPA support.");
+    }
+    
+    let crawl_result = {
+        let spider = crawler::Spider::new(
+            detector.client.clone(),
+            crawler_config,
+            detector.config.user_agent.clone(),
+        );
+        let spider = if let Some(ref session) = detector.session {
+            spider.with_session(session.clone())
+        } else {
+            spider
+        };
+        spider.crawl(start_url).await?
+    };
+
+    info!(
+        "Discovered {} injection points across {} pages",
+        crawl_result.injection_points.len(),
+        crawl_result.visited_pages.len()
+    );
+
+    // Phase 2+: Same as regular auto_scan
+    run_scan_phases(detector, crawl_result, pipeline_config).await
+}
+
+/// Run scan phases (Phase 2, 3, 4) after crawling.
+/// Extracted to avoid code duplication between auto_scan and auto_scan_headless.
+async fn run_scan_phases(
+    detector: SqliDetector,
+    crawl: crawler::CrawlResult,
+    pipeline_config: pipeline::PipelineConfig,
+) -> Result<Vec<pipeline::PipelineResult>> {
     // Phase 2: Scan each injection point
     let mut all_results: Vec<pipeline::PipelineResult> = Vec::new();
 
     for point in &crawl.injection_points {
         let pipe = pipeline::Pipeline::new(detector.clone(), pipeline_config.clone());
         match point.method {
-            crawler::HttpMethod::Get => {
-                match pipe.run(&point.url, None, None).await {
-                    Ok(result) => all_results.push(result),
-                    Err(e) => warn!("GET scan failed for {}: {}", point.url, e),
-                }
-            }
+            crawler::HttpMethod::Get => match pipe.run(&point.url, None, None).await {
+                Ok(result) => all_results.push(result),
+                Err(e) => warn!("GET scan failed for {}: {}", point.url, e),
+            },
             crawler::HttpMethod::Post => {
                 // Reconstruct a form-encoded body from discovered params
                 let body: String = point
@@ -130,40 +212,48 @@ pub async fn auto_scan(
     }
 
     // Phase 3: scan visited pages that have no explicit injection points.
-    //
-    // Many apps (e.g. sqli-labs) respond to common GET params like ?id=1 but
-    // don't embed those params in any HTML form or link — the crawler finds the
-    // page URLs but produces zero injection points for them.  `test_url` already
-    // contains a common-param fuzzing fallback for parameterless URLs, so we just
-    // need to call it on each such page.
     let covered: std::collections::HashSet<String> = crawl
         .injection_points
         .iter()
         .map(|p| {
             reqwest::Url::parse(&p.url)
-                .map(|mut u| { u.set_query(None); u.to_string() })
+                .map(|mut u| {
+                    u.set_query(None);
+                    u.to_string()
+                })
                 .unwrap_or_else(|_| p.url.clone())
         })
         .collect();
 
-    // Phase 3 uses a lightweight detector — only error-based + boolean-blind.
-    // UNION and time-based are too slow for discovery on hundreds of param×page
-    // combinations; they run in full scans once a vuln is confirmed.
     let phase3_detector = {
         let mut cfg = detector.config.clone();
         cfg.techniques = vec![
             crate::sqx::models::SqliTechnique::ErrorBased,
             crate::sqx::models::SqliTechnique::BooleanBlind,
         ];
-        crate::sqx::detector::SqliDetector::with_config(cfg)
-            .unwrap_or_else(|_| detector.clone())
+        let mut phase3 = crate::sqx::detector::SqliDetector::with_config(cfg)
+            .unwrap_or_else(|_| detector.clone());
+        if let Some(ref session) = detector.session {
+            phase3 = phase3.with_session(session.clone());
+        }
+        // Pass OOB server to phase 3 detector if configured (Pro feature)
+        if let Some(ref oob_server) = detector.oob_server {
+            phase3 = phase3.with_oob_dyn(oob_server.clone());
+        }
+        if let Some(ref token) = detector.cancel_token {
+            phase3 = phase3.with_cancel_token(token.clone());
+        }
+        phase3
     };
 
     for page_url in &crawl.visited_pages {
         if covered.contains(page_url) {
             continue;
         }
-        debug!("Phase 3: fuzzing common params on parameterless page {}", page_url);
+        debug!(
+            "Phase 3: fuzzing common params on parameterless page {}",
+            page_url
+        );
         let pipe = pipeline::Pipeline::new(phase3_detector.clone(), pipeline_config.clone());
         match pipe.run(page_url, None, None).await {
             Ok(result) => {
@@ -175,74 +265,8 @@ pub async fn auto_scan(
         }
     }
 
-    // Phase 4: Second-order detection & Auto-provisioning
-    info!("Phase 4: Second-order SQL injection discovery");
+    // Note: Second-order detection is a Pro feature
+    // In Core, we focus on direct SQL injection detection
     
-    // 1. Find registration forms
-    let reg_forms: Vec<_> = crawl.injection_points.iter()
-        .filter(|p| p.form_type == Some(models::FormType::Registration))
-        .collect();
-
-    for reg_point in reg_forms {
-        // 2. Auto-provision test user
-        if let Ok(provision) = detector.auto_provision(reg_point).await {
-            if provision.success {
-                // 3. Configure session with these credentials for subsequent discovery
-                let mut auth_config = session::AuthConfig {
-                    login_url: String::new(),
-                    method: "form".to_string(),
-                    credentials: std::collections::HashMap::new(),
-                    basic_username: None,
-                    basic_password: None,
-                    bearer_token: None,
-                    success_indicator: None,
-                };
-                
-                // Find a login form to use these credentials
-                let login_point = crawl.injection_points.iter()
-                    .find(|p| p.form_type == Some(models::FormType::Login));
-                
-                if let Some(lp) = login_point {
-                    auth_config.login_url = lp.url.clone();
-                    for param in &lp.parameters {
-                        let val = match param.name.to_lowercase().as_str() {
-                            "username" | "user" | "login" => Some(provision.username.clone()),
-                            "password" | "pass" | "pwd" => Some(provision.password.clone()),
-                            _ => None,
-                        };
-                        if let Some(v) = val {
-                            auth_config.credentials.insert(param.name.clone(), v);
-                        }
-                    }
-
-                    // Attach session to a dedicated discovery detector
-                    let sess_mgr = Arc::new(session::SessionManager::new(session::SessionConfig {
-                        auth: Some(auth_config),
-                        ..Default::default()
-                    }));
-                    
-                    let discovery_detector = detector.clone().with_session(sess_mgr);
-                    if let Ok(_) = discovery_detector.ensure_authenticated().await {
-                        // 4. Discover candidates
-                        let candidates = discovery_detector.discover_second_order_candidates(&crawl, &provision).await;
-                        for candidate in candidates {
-                            // 5. Test each candidate
-                            let second_order_results = discovery_detector.test_second_order(&candidate).await;
-                            if !second_order_results.is_empty() {
-                                all_results.push(pipeline::PipelineResult::new(
-                                    second_order_results,
-                                    None,
-                                    1,
-                                    discovery_detector.request_count(),
-                                    0.0,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     Ok(all_results)
 }

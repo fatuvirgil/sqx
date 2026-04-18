@@ -6,3 +6,10 @@
 .DS_Store
 .idea/
 .vscode/
+
+# AI assistant configuration (not for public)
+.claude/
+.cline/
+.codex
+.kimi/
+.mntc/

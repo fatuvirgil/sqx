@@ -14,13 +14,13 @@
 //! write_reports(&pipeline_result, Path::new("./reports"))?;
 //! ```
 
-pub mod sarif;
 pub mod json_report;
 pub mod markdown;
+pub mod sarif;
 
-pub use sarif::SarifReport;
 pub use json_report::JsonReport;
 pub use markdown::MarkdownReport;
+pub use sarif::SarifReport;
 
 use anyhow::Result;
 use std::path::Path;

@@ -1,0 +1,454 @@
+# SQX Cross-DB Matrix Testing Environment
+# Tests detection and extraction against multiple DBMS versions
+#
+# Usage:
+#   cd tests/db-matrix && docker compose up -d
+#   # Wait for all DBs to initialize (~60 seconds)
+#   ./scripts/verify-all.sh
+#
+# Services:
+#   - MySQL 5.7:      http://localhost:33057 (sqli-labs)
+#   - MySQL 8.0:      http://localhost:33080 (sqli-labs)
+#   - MariaDB 10:     http://localhost:33010 (sqli-labs)
+#   - PostgreSQL 13:  http://localhost:54313 (pg-sqli-labs)
+#   - MSSQL 2019:     http://localhost:21433 (mssql-sqli-labs)
+#   - SQLite:         File-based, mounted at /data/sqli-labs.db
+
+version: "3.8"
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # MySQL 5.7
+  # ─────────────────────────────────────────────────────────────
+  mysql-57:
+    image: mysql:5.7
+    container_name: sqx_mysql_57
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: security
+      MYSQL_USER: sqx_test
+      MYSQL_PASSWORD: sqx_pass
+    ports:
+      - "33057:3306"
+    volumes:
+      - ./init/mysql/sqli-labs.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init/mysql/test-data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - mysql_57_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # MySQL 8.0
+  # ─────────────────────────────────────────────────────────────
+  mysql-80:
+    image: mysql:8.0
+    container_name: sqx_mysql_80
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: security
+      MYSQL_USER: sqx_test
+      MYSQL_PASSWORD: sqx_pass
+    ports:
+      - "33080:3306"
+    volumes:
+      - ./init/mysql/sqli-labs.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init/mysql/test-data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - mysql_80_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # MariaDB 10.6
+  # ─────────────────────────────────────────────────────────────
+  mariadb-10:
+    image: mariadb:10.6
+    container_name: sqx_mariadb_10
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: security
+      MYSQL_USER: sqx_test
+      MYSQL_PASSWORD: sqx_pass
+    ports:
+      - "33010:3306"
+    volumes:
+      - ./init/mysql/sqli-labs.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init/mysql/test-data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - mariadb_10_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL 13
+  # ─────────────────────────────────────────────────────────────
+  postgres-13:
+    image: postgres:13
+    container_name: sqx_postgres_13
+    environment:
+      POSTGRES_USER: sqx_test
+      POSTGRES_PASSWORD: sqx_pass
+      POSTGRES_DB: security
+    ports:
+      - "54313:5432"
+    volumes:
+      - ./init/postgres/pg-sqli-labs.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init/postgres/test-data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - postgres_13_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqx_test -d security"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # MSSQL 2019 (Linux)
+  # ─────────────────────────────────────────────────────────────
+  mssql-2019:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    container_name: sqx_mssql_2019
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "SqxTestPass123!"
+      MSSQL_PID: "Developer"
+    ports:
+      - "21433:1433"
+    volumes:
+      - ./init/mssql/mssql-sqli-labs.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init/mssql/test-data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - ./init/mssql/entrypoint.sh:/usr/src/app/entrypoint.sh
+      - mssql_2019_data:/var/opt/mssql
+    entrypoint: ["/bin/bash", "/usr/src/app/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "SqxTestPass123!", "-Q", "SELECT 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # ClickHouse
+  # ─────────────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: sqx_clickhouse
+    ports:
+      - "8123:8123"
+      - "19000:9000"
+    volumes:
+      - ./init/clickhouse:/docker-entrypoint-initdb.d
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_USER: sqx_test
+      CLICKHOUSE_PASSWORD: sqx_pass
+      CLICKHOUSE_DB: security
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # CockroachDB
+  # ─────────────────────────────────────────────────────────────
+  cockroachdb:
+    image: cockroachdb/cockroach:latest-v23.1
+    container_name: sqx_cockroachdb
+    ports:
+      - "26257:26257"
+      - "28080:8080"
+    volumes:
+      - cockroachdb_data:/cockroach/cockroach-data
+      - ./init/cockroachdb:/docker-entrypoint-initdb.d
+    command: start-single-node --insecure --listen-addr=:26257 --http-addr=:8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health?ready=1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # Firebird 4.0
+  # ─────────────────────────────────────────────────────────────
+  firebird:
+    image: jacobalberty/firebird:v4.0
+    container_name: sqx_firebird
+    ports:
+      - "3050:3050"
+    volumes:
+      - firebird_data:/firebird/data
+      - ./init/firebird:/docker-entrypoint-initdb.d
+    environment:
+      ISC_USER: sysdba
+      ISC_PASSWORD: masterkey
+      FIREBIRD_DATABASE: security.fdb
+      FIREBIRD_USER: sqx_test
+      FIREBIRD_PASSWORD: sqx_pass
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # SQLite (file-based, no service needed)
+  # Initialized by shared init container
+  # ─────────────────────────────────────────────────────────────
+  sqlite-init:
+    image: nouchka/sqlite3:latest
+    container_name: sqx_sqlite_init
+    volumes:
+      - ./init/sqlite:/init
+      - sqlite_data:/data
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        sqlite3 /data/sqli-labs.db < /init/schema.sql
+        sqlite3 /data/sqli-labs.db < /init/test-data.sql
+        echo "SQLite initialized at /data/sqli-labs.db"
+    networks:
+      - sqx_db_matrix
+
+  # ─────────────────────────────────────────────────────────────
+  # Test Web Applications (PHP frontends for each DB)
+  # ─────────────────────────────────────────────────────────────
+
+  # MySQL 5.7 Web App
+  web-mysql57:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_mysql57
+    ports:
+      - "8057:80"
+    volumes:
+      - ./webapps/mysql:/var/www/html
+    environment:
+      DB_HOST: mysql-57
+      DB_PORT: 3306
+      DB_NAME: security
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      mysql-57:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # MySQL 8.0 Web App
+  web-mysql80:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_mysql80
+    ports:
+      - "8080:80"
+    volumes:
+      - ./webapps/mysql:/var/www/html
+    environment:
+      DB_HOST: mysql-80
+      DB_PORT: 3306
+      DB_NAME: security
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      mysql-80:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # MariaDB Web App
+  web-mariadb:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_mariadb
+    ports:
+      - "8010:80"
+    volumes:
+      - ./webapps/mysql:/var/www/html
+    environment:
+      DB_HOST: mariadb-10
+      DB_PORT: 3306
+      DB_NAME: security
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      mariadb-10:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # PostgreSQL Web App
+  web-postgres:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_postgres
+    ports:
+      - "8113:80"
+    volumes:
+      - ./webapps/postgres:/var/www/html
+    environment:
+      DB_HOST: postgres-13
+      DB_PORT: 5432
+      DB_NAME: security
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      postgres-13:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # SQLite Web App
+  web-sqlite:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_sqlite
+    ports:
+      - "8190:80"
+    volumes:
+      - ./webapps/sqlite:/var/www/html
+      - sqlite_data:/data:ro
+    environment:
+      SQLITE_DB: /data/sqli-labs.db
+    depends_on:
+      - sqlite-init
+    networks:
+      - sqx_db_matrix
+
+  # ClickHouse Web App
+  web-clickhouse:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_clickhouse
+    ports:
+      - "8124:80"
+    volumes:
+      - ./webapps/clickhouse:/var/www/html
+    environment:
+      DB_HOST: clickhouse
+      DB_PORT: 8123
+      DB_NAME: security
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # CockroachDB Web App
+  web-cockroachdb:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_cockroachdb
+    ports:
+      - "26258:80"
+    volumes:
+      - ./webapps/cockroachdb:/var/www/html
+    environment:
+      DB_HOST: cockroachdb
+      DB_PORT: 26257
+      DB_NAME: security
+      DB_USER: root
+      DB_PASS: ""
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+    networks:
+      - sqx_db_matrix
+
+  # Firebird Web App
+  web-firebird:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_firebird
+    ports:
+      - "3051:80"
+    volumes:
+      - ./webapps/firebird:/var/www/html
+    environment:
+      DB_HOST: firebird
+      DB_NAME: /firebird/data/security.fdb
+      DB_USER: sqx_test
+      DB_PASS: sqx_pass
+    depends_on:
+      - firebird
+    networks:
+      - sqx_db_matrix
+
+
+  # ─────────────────────────────────────────────────────────────
+  # TiDB
+  # ─────────────────────────────────────────────────────────────
+  tidb:
+    image: pingcap/tidb:v7.1.0
+    container_name: sqx_tidb
+    ports:
+      - "4000:4000"
+      - "10080:10080"
+    volumes:
+      - tidb_data:/tmp/tidb
+    networks:
+      - sqx_db_matrix
+
+  # TiDB Web App
+  web-tidb:
+    build:
+      context: ./webapps
+      dockerfile: Dockerfile.php
+    container_name: sqx_web_tidb
+    ports:
+      - "4001:80"
+    volumes:
+      - ./webapps/tidb:/var/www/html
+    environment:
+      DB_HOST: tidb
+      DB_PORT: 4000
+      DB_NAME: security
+      DB_USER: root
+      DB_PASS: ""
+    depends_on:
+      - tidb
+    networks:
+      - sqx_db_matrix
+
+networks:
+  sqx_db_matrix:
+    driver: bridge
+
+volumes:
+  mysql_57_data:
+  mysql_80_data:
+  mariadb_10_data:
+  postgres_13_data:
+  mssql_2019_data:
+  sqlite_data:
+  clickhouse_data:
+  cockroachdb_data:
+  firebird_data:
+  tidb_data:

@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use crate::sqx::{
     detector::SqliDetector,
     evasion::tamper_chain::TamperChain,
-    models::{HttpResponse, SqliTestResult, SqliTechnique},
+    models::{HttpResponse, SqliTechnique, SqliTestResult},
     similarity::detect_sql_error,
 };
 
@@ -19,12 +19,12 @@ use crate::sqx::{
 /// The baseline is injected in the *normal* request so the server accepts it;
 /// payloads are appended to this value.
 const INJECTABLE_HEADERS: &[(&str, &str)] = &[
-    ("X-Forwarded-For",  "127.0.0.1"),
-    ("X-Real-IP",        "127.0.0.1"),
-    ("X-Client-IP",      "127.0.0.1"),
-    ("User-Agent",       "Mozilla/5.0 (compatible; sqx/1.0)"),
-    ("Referer",          "https://example.com/"),
-    ("Cookie",           "session=sqx_test"),
+    ("X-Forwarded-For", "127.0.0.1"),
+    ("X-Real-IP", "127.0.0.1"),
+    ("X-Client-IP", "127.0.0.1"),
+    ("User-Agent", "Mozilla/5.0 (compatible; sqx/1.0)"),
+    ("Referer", "https://example.com/"),
+    ("Cookie", "session=sqx_test"),
 ];
 
 /// Quick error-based payloads — single-char openers plus common OR conditions.
@@ -47,15 +47,36 @@ impl SqliDetector {
     /// The `parameter` field in each result is prefixed with `header:` so
     /// reports clearly distinguish header vectors from query-string params.
     pub async fn test_headers(&self, url: &str) -> Vec<SqliTestResult> {
+        self.test_headers_with_optional_tamper(url, None).await
+    }
+
+    pub async fn test_headers_with_tamper(
+        &self,
+        url: &str,
+        tamper: &TamperChain,
+    ) -> Vec<SqliTestResult> {
+        self.test_headers_with_optional_tamper(url, Some(tamper))
+            .await
+    }
+
+    async fn test_headers_with_optional_tamper(
+        &self,
+        url: &str,
+        tamper: Option<&TamperChain>,
+    ) -> Vec<SqliTestResult> {
         let mut results = Vec::new();
 
         for (header_name, baseline_value) in INJECTABLE_HEADERS {
             debug!("Testing header injection vector: {}", header_name);
             let found = self
-                .test_header_injection(url, header_name, baseline_value, None)
+                .test_header_injection(url, header_name, baseline_value, tamper)
                 .await;
             results.extend(found);
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         if !results.is_empty() {
@@ -97,7 +118,8 @@ impl SqliDetector {
         let param_label = format!("header:{}", header_name);
 
         // Compute adaptive sleep for time-based detection based on baseline response time.
-        let estimated_stddev = std::time::Duration::from_millis(baseline.duration.as_millis() as u64 / 4);
+        let estimated_stddev =
+            std::time::Duration::from_millis(baseline.duration.as_millis() as u64 / 4);
         let adaptive_sleep = self.compute_adaptive_sleep(baseline.duration, estimated_stddev);
         self.set_adaptive_sleep(adaptive_sleep);
 
@@ -141,7 +163,11 @@ impl SqliDetector {
             }
 
             // ── Boolean-blind ────────────────────────────────────────────────
-            if self.config.techniques.contains(&SqliTechnique::BooleanBlind) {
+            if self
+                .config
+                .techniques
+                .contains(&SqliTechnique::BooleanBlind)
+            {
                 let baseline_len = baseline.body.len() as i64;
                 let resp_len = resp.body.len() as i64;
                 if (baseline_len - resp_len).abs() > 50 && baseline.status == resp.status {
@@ -192,7 +218,11 @@ impl SqliDetector {
                 return results;
             }
 
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         results
@@ -209,15 +239,48 @@ impl SqliDetector {
         post_body: &str,
         content_type: &str,
     ) -> Vec<SqliTestResult> {
+        self.test_headers_post_with_optional_tamper(url, post_body, content_type, None)
+            .await
+    }
+
+    pub async fn test_headers_post_with_tamper(
+        &self,
+        url: &str,
+        post_body: &str,
+        content_type: &str,
+        tamper: &TamperChain,
+    ) -> Vec<SqliTestResult> {
+        self.test_headers_post_with_optional_tamper(url, post_body, content_type, Some(tamper))
+            .await
+    }
+
+    async fn test_headers_post_with_optional_tamper(
+        &self,
+        url: &str,
+        post_body: &str,
+        content_type: &str,
+        tamper: Option<&TamperChain>,
+    ) -> Vec<SqliTestResult> {
         let mut results = Vec::new();
 
         for (header_name, baseline_value) in INJECTABLE_HEADERS {
             debug!("Testing POST header injection vector: {}", header_name);
             let found = self
-                .test_header_injection_post(url, post_body, content_type, header_name, baseline_value, None)
+                .test_header_injection_post(
+                    url,
+                    post_body,
+                    content_type,
+                    header_name,
+                    baseline_value,
+                    tamper,
+                )
                 .await;
             results.extend(found);
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         if !results.is_empty() {
@@ -245,17 +308,26 @@ impl SqliDetector {
 
         let ct_header = match content_type {
             "json" => "application/json",
-            "xml"  => "application/xml",
-            _      => "application/x-www-form-urlencoded",
+            "xml" => "application/xml",
+            _ => "application/x-www-form-urlencoded",
         };
 
         let baseline = match self
-            .send_post_request_with_injected_header(url, post_body, ct_header, header_name, header_value)
+            .send_post_request_with_injected_header(
+                url,
+                post_body,
+                ct_header,
+                header_name,
+                header_value,
+            )
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                warn!("POST baseline request failed for header {}: {}", header_name, e);
+                warn!(
+                    "POST baseline request failed for header {}: {}",
+                    header_name, e
+                );
                 return results;
             }
         };
@@ -271,7 +343,13 @@ impl SqliDetector {
 
             let start = Instant::now();
             let resp = match self
-                .send_post_request_with_injected_header(url, post_body, ct_header, header_name, &injected_value)
+                .send_post_request_with_injected_header(
+                    url,
+                    post_body,
+                    ct_header,
+                    header_name,
+                    &injected_value,
+                )
                 .await
             {
                 Ok(r) => r,
@@ -299,7 +377,11 @@ impl SqliDetector {
                 }
             }
 
-            if self.config.techniques.contains(&SqliTechnique::BooleanBlind) {
+            if self
+                .config
+                .techniques
+                .contains(&SqliTechnique::BooleanBlind)
+            {
                 let baseline_len = baseline.body.len() as i64;
                 let resp_len = resp.body.len() as i64;
                 if (baseline_len - resp_len).abs() > 50 && baseline.status == resp.status {
@@ -340,7 +422,11 @@ impl SqliDetector {
                 return results;
             }
 
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         results
@@ -401,7 +487,12 @@ impl SqliDetector {
         let body = response.text().await?;
         let duration = start.elapsed();
 
-        Ok(HttpResponse { status, body, duration, headers })
+        Ok(HttpResponse {
+            status,
+            body,
+            duration,
+            headers,
+        })
     }
 
     /// Send a GET request where `header_name` is set to `header_value`.
@@ -459,6 +550,11 @@ impl SqliDetector {
         let body = response.text().await?;
         let duration = start.elapsed();
 
-        Ok(HttpResponse { status, body, duration, headers })
+        Ok(HttpResponse {
+            status,
+            body,
+            duration,
+            headers,
+        })
     }
 }

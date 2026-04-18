@@ -9,5 +9,10 @@ async fn manual_debug_error_based() {
     println!("STATUS: {}", resp.status);
     println!("BODY LENGTH: {}", resp.body.len());
     println!("BODY SNIPPET: {}", &resp.body[..resp.body.len().min(500)]);
-    println!("CONTAINS ERROR: {}", resp.body.to_lowercase().contains("you have an error in your sql syntax"));
+    println!(
+        "CONTAINS ERROR: {}",
+        resp.body
+            .to_lowercase()
+            .contains("you have an error in your sql syntax")
+    );
 }

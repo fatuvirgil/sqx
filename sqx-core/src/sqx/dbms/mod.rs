@@ -3,39 +3,45 @@
 //! then push a boxed instance into all_dialects().
 
 pub mod dialect;
-pub mod major;
 pub mod exotic;
+pub mod major;
 
 pub use dialect::DbmsDialect;
 
-use major::{MySQL, MariaDB, PostgreSQL, Mssql, Oracle, Sqlite};
 use exotic::{
-    Db2, Sybase, Firebird, Hsqldb, H2, Informix, Ingres,
-    CockroachDb, TiDb, ClickHouse, Mckoi, Derby, Cache,
-    FrontBase, MonetDb, Virtuoso, Msql,
+    Cache, ClickHouse, CockroachDb, Db2, Derby, Firebird, FrontBase, H2, Hsqldb, Informix, Ingres,
+    Mckoi, MonetDb, Msql, Sybase, TiDb, Virtuoso,
 };
+use major::{MariaDB, Mssql, MySQL, Oracle, PostgreSQL, Sqlite};
 
 /// All known DBMS dialects, major engines first.
 pub fn all_dialects() -> Vec<Box<dyn DbmsDialect>> {
     vec![
+        // Major DBMS (most common first)
+        Box::new(MariaDB),  // Check before MySQL - more specific patterns (MariaDB server version)
         Box::new(MySQL),
         Box::new(PostgreSQL),
         Box::new(Mssql),
         Box::new(Oracle),
+        // ClickHouse (very specific error patterns - check early)
+        Box::new(ClickHouse),
+        // PostgreSQL-compatible (check before generic SQLite)
+        Box::new(CockroachDb),
+        Box::new(TiDb),
+        // Generic SQLite (lowest priority - generic error patterns)
         Box::new(Sqlite),
-        Box::new(MariaDB),
+        // Legacy/Enterprise
         Box::new(Db2),
         Box::new(Sybase),
         Box::new(Firebird),
-        Box::new(Hsqldb),
-        Box::new(H2),
         Box::new(Informix),
         Box::new(Ingres),
-        Box::new(CockroachDb),
-        Box::new(TiDb),
-        Box::new(ClickHouse),
-        Box::new(Mckoi),
+        // Embedded/Java
+        Box::new(Hsqldb),
+        Box::new(H2),
         Box::new(Derby),
+        // Niche/Specialty
+        Box::new(Mckoi),
         Box::new(Cache),
         Box::new(FrontBase),
         Box::new(MonetDb),
@@ -47,5 +53,7 @@ pub fn all_dialects() -> Vec<Box<dyn DbmsDialect>> {
 /// Find a dialect by name (case-insensitive).
 pub fn dialect_by_name(name: &str) -> Option<Box<dyn DbmsDialect>> {
     let lower = name.to_lowercase();
-    all_dialects().into_iter().find(|d| d.name().to_lowercase() == lower)
+    all_dialects()
+        .into_iter()
+        .find(|d| d.name().to_lowercase() == lower)
 }

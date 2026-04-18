@@ -1,10 +1,9 @@
-//! Data extraction modules: blind boolean, time-based, schema enumeration,
-//! file read, and OS command execution.
+//! Data extraction primitives: blind boolean, time-based, schema enumeration,
+//! and raw helper modules used by higher-level workflows.
+//!
+//! Operator-facing post-exploitation APIs live under `sqx::takeover`.
 
 pub mod blind;
-pub mod time_blind;
-pub mod schema;
-pub mod file_read;
-pub mod file_write;
-pub mod os_exec;
 pub mod dump;
+pub mod schema;
+pub mod time_blind;

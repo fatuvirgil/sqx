@@ -5,11 +5,11 @@
 //!   2. For every (table, column) pair: `extract_data_blind`
 //!   3. Return columnar data aligned by row index into `DumpAllResult`
 
+use anyhow::Result;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use anyhow::Result;
-use serde::Serialize;
 use tracing::info;
 
 use crate::sqx::{
@@ -47,13 +47,16 @@ impl DumpAllResult {
                 None => continue,
             };
 
-            let row_count = cols.iter()
+            let row_count = cols
+                .iter()
                 .filter_map(|c| table_data.get(c))
                 .map(|v| v.len())
                 .max()
                 .unwrap_or(0);
 
-            if row_count == 0 { continue; }
+            if row_count == 0 {
+                continue;
+            }
 
             out.push_str(&format!("\n[TABLE: {}]\n", table));
             out.push_str(&cols.join(" | "));
@@ -62,12 +65,16 @@ impl DumpAllResult {
             out.push('\n');
 
             for row_idx in 0..row_count {
-                let row: Vec<String> = cols.iter().map(|col| {
-                    table_data.get(col)
-                        .and_then(|vals| vals.get(row_idx))
-                        .cloned()
-                        .unwrap_or_else(|| "NULL".to_string())
-                }).collect();
+                let row: Vec<String> = cols
+                    .iter()
+                    .map(|col| {
+                        table_data
+                            .get(col)
+                            .and_then(|vals| vals.get(row_idx))
+                            .cloned()
+                            .unwrap_or_else(|| "NULL".to_string())
+                    })
+                    .collect();
                 out.push_str(&row.join(" | "));
                 out.push('\n');
             }
@@ -88,31 +95,38 @@ impl DumpAllResult {
                 None => continue,
             };
 
-            let row_count = cols.iter()
+            let row_count = cols
+                .iter()
                 .filter_map(|c| table_data.get(c))
                 .map(|v| v.len())
                 .max()
                 .unwrap_or(0);
 
-            if row_count == 0 { continue; }
+            if row_count == 0 {
+                continue;
+            }
 
             out.push_str(&format!("# {}\n", table));
             out.push_str(&cols.join(","));
             out.push('\n');
 
             for row_idx in 0..row_count {
-                let row: Vec<String> = cols.iter().map(|col| {
-                    let val = table_data.get(col)
-                        .and_then(|vals| vals.get(row_idx))
-                        .cloned()
-                        .unwrap_or_else(|| String::new());
-                    // Quote values containing commas or quotes
-                    if val.contains(',') || val.contains('"') {
-                        format!("\"{}\"", val.replace('"', "\"\""))
-                    } else {
-                        val
-                    }
-                }).collect();
+                let row: Vec<String> = cols
+                    .iter()
+                    .map(|col| {
+                        let val = table_data
+                            .get(col)
+                            .and_then(|vals| vals.get(row_idx))
+                            .cloned()
+                            .unwrap_or_else(|| String::new());
+                        // Quote values containing commas or quotes
+                        if val.contains(',') || val.contains('"') {
+                            format!("\"{}\"", val.replace('"', "\"\""))
+                        } else {
+                            val
+                        }
+                    })
+                    .collect();
                 out.push_str(&row.join(","));
                 out.push('\n');
             }
@@ -143,7 +157,9 @@ impl SqliDetector {
         // ── Discover injection context (boundary + time template) ────────────
         let (close, balance, time_template) = match technique {
             BlindTechnique::Boolean => {
-                let (c, b) = self.discover_boundary_blind(url, param, original_value, &baseline).await?
+                let (c, b) = self
+                    .discover_boundary_blind(url, param, original_value, &baseline)
+                    .await?
                     .unwrap_or_else(|| {
                         if original_value.parse::<i64>().is_ok() {
                             ("".to_string(), "-- ".to_string())
@@ -160,7 +176,9 @@ impl SqliDetector {
                 let threshold = baseline_mean + baseline_stddev * 2;
                 total_requests += 3;
 
-                let (c, b) = self.discover_boundary_time_based(url, param, original_value, dbms, threshold).await?
+                let (c, b) = self
+                    .discover_boundary_time_based(url, param, original_value, dbms, threshold)
+                    .await?
                     .unwrap_or_else(|| {
                         if original_value.parse::<i64>().is_ok() {
                             ("".to_string(), "-- ".to_string())
@@ -169,9 +187,9 @@ impl SqliDetector {
                         }
                     });
 
-                let template = self.discover_time_payload(
-                    url, param, original_value, dbms, &c, &b, threshold,
-                ).await;
+                let template = self
+                    .discover_time_payload(url, param, original_value, dbms, &c, &b, threshold)
+                    .await;
                 (c, b, template)
             }
         };
@@ -182,7 +200,10 @@ impl SqliDetector {
             max_tables: 100,
             max_columns_per_table: 50,
             max_name_length: 64,
-            column_wordlist: crate::sqx::models::DEFAULT_COLUMN_WORDLIST.iter().map(|s| s.to_string()).collect(),
+            column_wordlist: crate::sqx::models::DEFAULT_COLUMN_WORDLIST
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         };
 
         let progress_cb: Option<Arc<dyn Fn(SchemaEnumerationProgress) + Send + Sync>> =
@@ -196,9 +217,18 @@ impl SqliDetector {
         info!("dump_all: enumerating schema for DBMS={}", dbms);
         let schema = self
             .enumerate_full_schema(
-                url, param, original_value, dbms, &schema_cfg,
-                &baseline, &close, &balance, None, &time_template,
-                progress_cb, cancel_token.clone(),
+                url,
+                param,
+                original_value,
+                dbms,
+                &schema_cfg,
+                &baseline,
+                &close,
+                &balance,
+                None,
+                &time_template,
+                progress_cb,
+                cancel_token.clone(),
             )
             .await?;
 
@@ -215,7 +245,11 @@ impl SqliDetector {
         let mut data: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
 
         'tables: for table in &tables {
-            if cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+            if cancel_token
+                .as_ref()
+                .map(|t| t.is_cancelled())
+                .unwrap_or(false)
+            {
                 break 'tables;
             }
 
@@ -230,7 +264,11 @@ impl SqliDetector {
             let mut col_data: HashMap<String, Vec<String>> = HashMap::new();
 
             for col in &table_cols {
-                if cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+                if cancel_token
+                    .as_ref()
+                    .map(|t| t.is_cancelled())
+                    .unwrap_or(false)
+                {
                     break;
                 }
 
@@ -249,17 +287,32 @@ impl SqliDetector {
                 let extraction_result = match technique {
                     BlindTechnique::Boolean => {
                         self.extract_data_blind(
-                            url, param, original_value, dbms,
-                            &extraction_cfg, &baseline,
-                            None, payload_id.as_deref(), None::<Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>, cancel_token.clone(),
-                        ).await
+                            url,
+                            param,
+                            original_value,
+                            dbms,
+                            &extraction_cfg,
+                            &baseline,
+                            None,
+                            payload_id.as_deref(),
+                            None::<Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>,
+                            cancel_token.clone(),
+                        )
+                        .await
                     }
                     BlindTechnique::Time => {
                         self.extract_data_time_based(
-                            url, param, original_value, dbms,
-                            &extraction_cfg, None, None,
-                            None::<Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>, cancel_token.clone(),
-                        ).await
+                            url,
+                            param,
+                            original_value,
+                            dbms,
+                            &extraction_cfg,
+                            None,
+                            None,
+                            None::<Box<dyn Fn(BlindExtractionProgress) + Send + Sync>>,
+                            cancel_token.clone(),
+                        )
+                        .await
                     }
                 };
 
@@ -268,7 +321,8 @@ impl SqliDetector {
                         total_requests += result.total_requests;
                         eprintln!(
                             "[dump]   → {} value(s) in {} reqs",
-                            result.extracted_values.len(), result.total_requests
+                            result.extracted_values.len(),
+                            result.total_requests
                         );
                         col_data.insert(col.clone(), result.extracted_values);
                     }
@@ -285,9 +339,17 @@ impl SqliDetector {
         let elapsed_secs = start.elapsed().as_secs_f64();
         eprintln!(
             "[dump] complete — {} table(s), {} total requests, {:.1}s",
-            tables.len(), total_requests, elapsed_secs
+            tables.len(),
+            total_requests,
+            elapsed_secs
         );
 
-        Ok(DumpAllResult { tables, columns, data, total_requests, elapsed_secs })
+        Ok(DumpAllResult {
+            tables,
+            columns,
+            data,
+            total_requests,
+            elapsed_secs,
+        })
     }
 }

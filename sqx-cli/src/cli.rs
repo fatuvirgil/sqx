@@ -12,15 +12,17 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
-use sqx_core::oob::{OobServer, OobServerConfig};
+use crate::commands::extraction::run_dump;
+use crate::commands::intel::run_intel;
+use crate::commands::scanning::{
+    auto_techniques, build_user_tamper_chain, run_auto, run_batch, run_scan,
+};
+use crate::commands::takeover::{run_custom_sql, run_file_read, run_file_write};
+use crate::commands::validate::run_validate;
 use sqx_core::sqx::{
-    SqliDetector, SqliConfig, SqliTechnique, TamperChain,
-    pipeline::PipelineConfig,
-    crawler::CrawlerConfig,
-    reporting::SarifReport,
+    SqliTechnique, TamperChain,
     ai_advisor::{AiAdvisorConfig, AiBackend},
-    models::BlindTechnique,
-    session::{SessionManager, SessionConfig, AuthConfig},
+    session::{AuthConfig, SessionConfig, SessionManager},
 };
 
 #[derive(Parser)]
@@ -28,7 +30,7 @@ use sqx_core::sqx::{
     name = "sqx",
     about = "SQX — SQL Injection Scanner",
     version,
-    propagate_version = true,
+    propagate_version = true
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -110,7 +112,7 @@ enum Command {
         #[arg(long, default_value = "8080")]
         oob_port: u16,
 
-        /// Output format: text, json, sarif, markdown (default: text)
+        /// Output format: text, json, sarif (markdown is Pro-only)
         #[arg(long, default_value = "text")]
         output: String,
 
@@ -237,6 +239,18 @@ enum Command {
         /// Custom parameter wordlist file (one per line) for fuzzing URLs without query strings
         #[arg(long)]
         param_wordlist: Option<String>,
+
+        /// Use headless browser for crawling (SPA support, requires Chrome)
+        #[arg(long)]
+        headless: bool,
+
+        /// Chrome/Chromium binary path (default: auto-detect)
+        #[arg(long)]
+        chrome_path: Option<String>,
+
+        /// Wait time for JS rendering in milliseconds (default: 2000)
+        #[arg(long, default_value = "2000")]
+        render_wait: u64,
     },
 
     /// Dump all data from a confirmed-vulnerable endpoint (schema + data extraction)
@@ -282,7 +296,7 @@ enum Command {
         /// Path to targets file
         targets: String,
 
-        /// Concurrent workers (default: 5)
+        /// Concurrent workers (default: 5, max 5 in Core, unlimited in Pro)
         #[arg(long, default_value = "5")]
         concurrency: usize,
 
@@ -369,6 +383,184 @@ enum Command {
         value: String,
     },
 
+    /// Execute a custom scalar SQL query/expression via blind extraction
+    #[command(name = "sql")]
+    Sql {
+        /// Target URL with the vulnerable parameter
+        url: String,
+
+        /// Injectable parameter name
+        #[arg(long)]
+        param: String,
+
+        /// SQL scalar query or expression returning one cell
+        #[arg(long)]
+        query: String,
+
+        /// Benign value for the parameter
+        #[arg(long, default_value = "1")]
+        value: String,
+
+        /// DBMS: mysql, postgresql, mssql, oracle, sqlite
+        #[arg(long, default_value = "mysql")]
+        dbms: String,
+
+        /// Extraction technique: boolean, time
+        #[arg(long, default_value = "boolean")]
+        technique: String,
+
+        /// Maximum extracted value length
+        #[arg(long, default_value = "256")]
+        max_length: usize,
+
+        /// Optional boundary hint from the payload database
+        #[arg(long)]
+        boundary: Option<String>,
+
+        /// Optional payload id/title for vector reuse
+        #[arg(long)]
+        payload_id: Option<String>,
+
+        /// Request delay in ms
+        #[arg(long, default_value = "100")]
+        delay: u64,
+
+        /// Output format: text, json
+        #[arg(long, default_value = "text")]
+        output: String,
+
+        /// Write output to file instead of stdout
+        #[arg(long, short = 'o')]
+        out_file: Option<String>,
+    },
+
+    /// Interactive SQL shell via blind injection.
+    /// Opens a REPL that executes SQL queries against the target database.
+    #[command(name = "sql-shell")]
+    SqlShell {
+        /// Target URL with the vulnerable parameter
+        url: String,
+
+        /// Injectable parameter name
+        #[arg(long)]
+        param: String,
+
+        /// Benign value for the parameter
+        #[arg(long, default_value = "1")]
+        value: String,
+
+        /// DBMS: mysql, postgresql, mssql, oracle, sqlite
+        #[arg(long, default_value = "mysql")]
+        dbms: String,
+
+        /// Extraction technique: boolean, time
+        #[arg(long, default_value = "boolean")]
+        technique: String,
+
+        /// Maximum output length per query
+        #[arg(long, default_value = "4096")]
+        max_length: usize,
+
+        /// Request delay in ms
+        #[arg(long, default_value = "100")]
+        delay: u64,
+    },
+
+    /// Interactive OS shell via SQL injection command execution.
+    /// Opens a REPL that executes OS commands on the target server.
+    #[command(name = "os-shell")]
+    OsShell {
+        /// Target URL with the vulnerable parameter
+        url: String,
+
+        /// Injectable parameter name
+        #[arg(long)]
+        param: String,
+
+        /// Benign value for the parameter
+        #[arg(long, default_value = "1")]
+        value: String,
+
+        /// DBMS: mysql, postgresql, mssql, oracle, sqlite
+        #[arg(long, default_value = "mysql")]
+        dbms: String,
+
+        /// Extraction technique: boolean, time
+        #[arg(long, default_value = "boolean")]
+        technique: String,
+
+        /// Maximum output length per command
+        #[arg(long, default_value = "4096")]
+        max_length: usize,
+
+        /// Request delay in ms
+        #[arg(long, default_value = "100")]
+        delay: u64,
+    },
+
+    /// Replay a request from a file or raw text.
+    /// Supports raw HTTP format and curl commands.
+    Replay {
+        /// Path to request file, or "-" to read from stdin
+        file: String,
+        
+        /// Output format: text, json
+        #[arg(long, default_value = "text")]
+        output: String,
+        
+        /// Write output to file
+        #[arg(long, short = 'o')]
+        out_file: Option<String>,
+        
+        /// Request timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+
+    /// Run benchmark against a test matrix (requires sqli-labs or similar).
+    /// Compares SQX detection rate and performance.
+    Bench {
+        /// Base URL of the test target (e.g., http://localhost:8080)
+        #[arg(long, default_value = "http://localhost:8080")]
+        target: String,
+        
+        /// Output file for JSON results
+        #[arg(long, short = 'o')]
+        out_file: Option<String>,
+    },
+
+    /// Collect intelligence for a target domain (CVEs, assets, advisories).
+    Intel {
+        /// Target domain to analyze (e.g., example.com)
+        domain: String,
+        
+        /// Output format: text, json
+        #[arg(long, default_value = "text")]
+        output: String,
+        
+        /// Write output to file
+        #[arg(long, short = 'o')]
+        out_file: Option<String>,
+        
+        /// KB path for caching
+        #[arg(long, default_value = "./data/intel.kb")]
+        kb_path: String,
+    },
+
+    /// Validate a SQL payload against syntax and semantic rules.
+    Validate {
+        /// SQL payload to validate
+        payload: String,
+        
+        /// Target database dialect: mysql, postgres, mssql, sqlite, oracle
+        #[arg(long, default_value = "mysql")]
+        dialect: String,
+        
+        /// Check against known SQLi techniques
+        #[arg(long)]
+        check_technique: bool,
+    },
+
     /// Download sqlmap payloads (GPLv2) + PayloadsAllTheThings (MIT) into local cache.
     /// Run this once to expand payload coverage beyond the built-in set.
     /// Files are stored in ~/.local/share/sqx/payloads/ and never redistributed.
@@ -392,27 +584,183 @@ impl Cli {
 
         let proxy = self.proxy;
         let session = build_session_manager(
-            self.cookie, self.cookie_auto_detect,
-            self.login_url, self.auth_method, self.auth_creds,
-            self.auth_user, self.auth_pass, self.auth_token, self.auth_success,
+            self.cookie,
+            self.cookie_auto_detect,
+            self.login_url,
+            self.auth_method,
+            self.auth_creds,
+            self.auth_user,
+            self.auth_pass,
+            self.auth_token,
+            self.auth_success,
         );
         match self.command {
-            Command::Scan { url, smart, tech, tamper, oob, oob_domain, oob_port, output, out_file, delay, timeout, param_wordlist, ai_advisor, ai_model, ai_api_key, ai_base_url, ai_consent } => {
-                let ai_cfg = build_ai_config(ai_advisor, &ai_model, ai_api_key.as_deref(), ai_base_url.as_deref(), ai_consent);
-                run_scan(url, smart, tech, tamper, oob, oob_domain, oob_port, output, out_file, delay, timeout, None, None, param_wordlist, proxy, session, ai_cfg).await;
+            Command::Scan {
+                url,
+                smart,
+                tech,
+                tamper,
+                oob,
+                oob_domain,
+                oob_port,
+                output,
+                out_file,
+                delay,
+                timeout,
+                param_wordlist,
+                ai_advisor,
+                ai_model,
+                ai_api_key,
+                ai_base_url,
+                ai_consent,
+            } => {
+                let ai_cfg = build_ai_config(
+                    ai_advisor,
+                    &ai_model,
+                    ai_api_key.as_deref(),
+                    ai_base_url.as_deref(),
+                    ai_consent,
+                );
+                run_scan(
+                    url,
+                    smart,
+                    tech,
+                    tamper,
+                    oob,
+                    oob_domain,
+                    oob_port,
+                    output,
+                    out_file,
+                    delay,
+                    timeout,
+                    None,
+                    None,
+                    param_wordlist,
+                    proxy,
+                    session,
+                    ai_cfg,
+                )
+                .await;
             }
-            Command::Post { url, body, ct, tech, tamper, output, out_file } => {
-                run_scan(url, false, tech, tamper, false, None, 8080, output, out_file, 100, 30, Some(body), Some(ct), None, proxy, session, None).await;
+            Command::Post {
+                url,
+                body,
+                ct,
+                tech,
+                tamper,
+                output,
+                out_file,
+            } => {
+                run_scan(
+                    url,
+                    false,
+                    tech,
+                    tamper,
+                    false,
+                    None,
+                    8080,
+                    output,
+                    out_file,
+                    100,
+                    30,
+                    Some(body),
+                    Some(ct),
+                    None,
+                    proxy,
+                    session,
+                    None,
+                )
+                .await;
             }
-            Command::Auto { url, smart, oob, oob_domain, max_pages, max_depth, ai_advisor, ai_model, ai_api_key, ai_base_url, ai_consent, output, out_file, param_wordlist } => {
-                let ai_cfg = build_ai_config(ai_advisor, &ai_model, ai_api_key.as_deref(), ai_base_url.as_deref(), ai_consent);
-                run_auto(url, smart, oob, oob_domain, max_pages, max_depth, output, out_file, param_wordlist, proxy, session, ai_cfg).await;
+            Command::Auto {
+                url,
+                smart,
+                oob,
+                oob_domain,
+                max_pages,
+                max_depth,
+                ai_advisor,
+                ai_model,
+                ai_api_key,
+                ai_base_url,
+                ai_consent,
+                output,
+                out_file,
+                param_wordlist,
+                headless,
+                chrome_path,
+                render_wait,
+            } => {
+                let ai_cfg = build_ai_config(
+                    ai_advisor,
+                    &ai_model,
+                    ai_api_key.as_deref(),
+                    ai_base_url.as_deref(),
+                    ai_consent,
+                );
+                run_auto(
+                    url,
+                    smart,
+                    oob,
+                    oob_domain,
+                    max_pages,
+                    max_depth,
+                    output,
+                    out_file,
+                    param_wordlist,
+                    proxy,
+                    session,
+                    ai_cfg,
+                    headless,
+                    chrome_path,
+                    render_wait,
+                )
+                .await;
             }
-            Command::Dump { url, param, value, dbms, technique, max_rows, output, out_file, delay } => {
-                run_dump(url, param, value, dbms, technique, max_rows, output, out_file, proxy, session, delay).await;
+            Command::Dump {
+                url,
+                param,
+                value,
+                dbms,
+                technique,
+                max_rows,
+                output,
+                out_file,
+                delay,
+            } => {
+                run_dump(
+                    url, param, value, dbms, technique, max_rows, output, out_file, proxy, session,
+                    delay,
+                )
+                .await;
             }
-            Command::Batch { targets, concurrency, smart, tech, tamper, delay, timeout, output, out_file, param_wordlist } => {
-                run_batch(targets, concurrency, smart, tech, tamper, delay, timeout, output, out_file, param_wordlist, proxy, session).await;
+            Command::Batch {
+                targets,
+                concurrency,
+                smart,
+                tech,
+                tamper,
+                delay,
+                timeout,
+                output,
+                out_file,
+                param_wordlist,
+            } => {
+                run_batch(
+                    targets,
+                    concurrency,
+                    smart,
+                    tech,
+                    tamper,
+                    delay,
+                    timeout,
+                    output,
+                    out_file,
+                    param_wordlist,
+                    proxy,
+                    session,
+                )
+                .await;
             }
             Command::Tampers => {
                 println!("Available tamper scripts:");
@@ -424,18 +772,97 @@ impl Cli {
                 eprintln!("[!] GUI moved to separate binary. Run: sqx-gui");
                 std::process::exit(1);
             }
+            Command::Replay {
+                file,
+                output,
+                out_file,
+                timeout,
+            } => {
+                crate::commands::replay::run_replay(file, output, out_file, timeout, proxy).await;
+            }
+            Command::Bench { target, out_file } => {
+                crate::commands::bench::run_bench(target, out_file).await;
+            }
+            Command::Intel { domain, output, out_file, kb_path } => {
+                run_intel(domain, output, out_file, kb_path).await;
+            }
+            Command::Validate { payload, dialect, check_technique } => {
+                run_validate(payload, dialect, check_technique);
+            }
             Command::UpdatePayloads => {
                 eprintln!("[*] Updating payload database...");
-                match sqx_core::sqx::payload_fetcher::DynamicPayloads::fetch_and_cache().await {
+                match sqx_core::sqx::payloads::PayloadDatabase::fetch_and_cache().await {
                     Ok(()) => eprintln!("[+] Done. Run any scan to use the new payloads."),
                     Err(e) => eprintln!("[-] Failed: {}", e),
                 }
             }
-            Command::FileRead { url, param, file, dbms, value, out_file } => {
+            Command::FileRead {
+                url,
+                param,
+                file,
+                dbms,
+                value,
+                out_file,
+            } => {
                 run_file_read(url, param, file, dbms, value, out_file, proxy, session).await;
             }
-            Command::FileWrite { url, param, file, content, dbms, value } => {
+            Command::FileWrite {
+                url,
+                param,
+                file,
+                content,
+                dbms,
+                value,
+            } => {
                 run_file_write(url, param, file, content, dbms, value, proxy, session).await;
+            }
+            Command::Sql {
+                url,
+                param,
+                query,
+                value,
+                dbms,
+                technique,
+                max_length,
+                boundary,
+                payload_id,
+                delay,
+                output,
+                out_file,
+            } => {
+                run_custom_sql(
+                    url, param, query, value, dbms, technique, max_length, boundary, payload_id,
+                    delay, output, out_file, proxy, session,
+                )
+                .await;
+            }
+            Command::SqlShell {
+                url,
+                param,
+                value,
+                dbms,
+                technique,
+                max_length,
+                delay,
+            } => {
+                crate::commands::shell::run_sql_shell(
+                    url, param, value, dbms, technique, max_length, delay, proxy, session,
+                )
+                .await;
+            }
+            Command::OsShell {
+                url,
+                param,
+                value,
+                dbms,
+                technique,
+                max_length,
+                delay,
+            } => {
+                crate::commands::shell::run_os_shell(
+                    url, param, value, dbms, technique, max_length, delay, proxy, session,
+                )
+                .await;
             }
         }
     }
@@ -459,9 +886,14 @@ fn build_session_manager(
     if let Some(ref c) = cookie {
         for part in c.split(';') {
             let part = part.trim();
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(eq_pos) = part.find('=') {
-                config.cookies.insert(part[..eq_pos].trim().to_string(), part[eq_pos + 1..].trim().to_string());
+                config.cookies.insert(
+                    part[..eq_pos].trim().to_string(),
+                    part[eq_pos + 1..].trim().to_string(),
+                );
             }
         }
     }
@@ -484,96 +916,40 @@ fn build_session_manager(
             bearer_token: auth_token,
             success_indicator: auth_success,
         });
+    } else if let Some(method) = auth_method {
+        let method = method.to_ascii_lowercase();
+        if matches!(method.as_str(), "basic" | "bearer") {
+            config.auth = Some(AuthConfig {
+                login_url: String::new(),
+                method,
+                credentials: std::collections::HashMap::new(),
+                basic_username: auth_user,
+                basic_password: auth_pass,
+                bearer_token: auth_token,
+                success_indicator: auth_success,
+            });
+        }
     }
 
-    if cookie.is_some() || auto_detect || config.auth.is_some() {
+    if cookie.is_some() || auto_detect || config.auth.is_some() || !config.headers.is_empty() {
         return Some(Arc::new(SessionManager::new(config)));
     }
     None
 }
 
-fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn std::error::Error + Send + Sync + 'static>>
+fn parse_key_val<T, U>(
+    s: &str,
+) -> Result<(T, U), Box<dyn std::error::Error + Send + Sync + 'static>>
 where
     T: std::str::FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
     U: std::str::FromStr,
     U::Err: std::error::Error + Send + Sync + 'static,
 {
-    let pos = s.find('=').ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
-}
-
-async fn build_oob_server(domain: Option<String>, port: u16) -> Option<Arc<OobServer>> {
-    let domain = domain?;
-    let config = OobServerConfig {
-        http_port: port,
-        dns_port: 8053,
-        domain: domain.clone(),
-        public_host: "127.0.0.1".to_string(),
-        ttl_seconds: 3600,
-    };
-    let server = Arc::new(OobServer::new(config));
-    match server.start().await {
-        Ok(()) => {
-            eprintln!("[+] OOB server started — HTTP :{}, DNS :8053, domain: {}", port, domain);
-            Some(server)
-        }
-        Err(e) => {
-            eprintln!("[!] Failed to start OOB server: {}", e);
-            None
-        }
-    }
-}
-
-fn parse_techniques(tech: Option<Vec<String>>) -> Vec<SqliTechnique> {
-    match tech {
-        None => vec![
-            SqliTechnique::ErrorBased,
-            SqliTechnique::BooleanBlind,
-            SqliTechnique::UnionBased,
-            SqliTechnique::TimeBased,
-            SqliTechnique::StackedQueries,
-        ],
-        Some(list) => list.iter().filter_map(|t| match t.to_lowercase().as_str() {
-            "error"   => Some(SqliTechnique::ErrorBased),
-            "blind"   => Some(SqliTechnique::BooleanBlind),
-            "union"   => Some(SqliTechnique::UnionBased),
-            "time"    => Some(SqliTechnique::TimeBased),
-            "stacked" => Some(SqliTechnique::StackedQueries),
-            "oob"     => Some(SqliTechnique::OutOfBand),
-            _         => None,
-        }).collect(),
-    }
-}
-
-fn build_detector(
-    techniques: Vec<SqliTechnique>,
-    delay: u64,
-    timeout: u64,
-    oob_server: Option<Arc<OobServer>>,
-    ai_advisor: Option<AiAdvisorConfig>,
-    param_wordlist: Option<Vec<String>>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-) -> SqliDetector {
-    let config = SqliConfig {
-        techniques,
-        delay_ms: delay,
-        timeout_secs: timeout,
-        ai_advisor: ai_advisor.unwrap_or_default(),
-        param_wordlist: param_wordlist.unwrap_or_else(|| SqliConfig::default().param_wordlist),
-        proxy,
-        ..SqliConfig::default()
-    };
-    let mut detector = SqliDetector::with_config(config)
-        .expect("Failed to build HTTP client");
-    if let Some(srv) = oob_server {
-        detector = detector.with_oob_server(srv);
-    }
-    if let Some(sess) = session {
-        detector = detector.with_session(sess);
-    }
-    detector
 }
 
 /// Build AI advisor config from CLI flags.
@@ -609,7 +985,10 @@ fn build_ai_config(
     }
 
     if backend.is_commercial() {
-        eprintln!("[*] AI advisor: using commercial backend '{}' (consent given)", model_spec);
+        eprintln!(
+            "[*] AI advisor: using commercial backend '{}' (consent given)",
+            model_spec
+        );
     } else {
         eprintln!("[*] AI advisor: using local backend '{}'", model_spec);
     }
@@ -622,555 +1001,94 @@ fn build_ai_config(
     })
 }
 
-async fn run_scan(
-    url: String,
-    smart: bool,
-    tech: Option<Vec<String>>,
-    tamper: Option<Vec<String>>,
-    oob: bool,
-    oob_domain: Option<String>,
-    oob_port: u16,
-    output: String,
-    out_file: Option<String>,
-    delay: u64,
-    timeout: u64,
-    post_body: Option<String>,
-    post_ct: Option<String>,
-    param_wordlist: Option<String>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-    ai_cfg: Option<AiAdvisorConfig>,
-) {
-    let oob_server = if oob {
-        build_oob_server(oob_domain, oob_port).await
-    } else {
-        None
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let mut techniques = parse_techniques(tech);
-    if oob && !techniques.contains(&SqliTechnique::OutOfBand) {
-        techniques.push(SqliTechnique::OutOfBand);
+    #[test]
+    fn user_tamper_chain_is_built_from_cli_values() {
+        let chain = build_user_tamper_chain(Some(vec![
+            "space_to_comment".to_string(),
+            "randomcase".to_string(),
+        ]))
+        .expect("tamper chain");
+        assert_eq!(chain.names(), vec!["space_to_comment", "randomcase"]);
     }
 
-    let wordlist = param_wordlist.map(|path| {
-        std::fs::read_to_string(&path)
-            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-            .unwrap_or_else(|e| { eprintln!("[!] Failed to read wordlist '{}': {}", path, e); Vec::new() })
-    });
-    let detector = build_detector(techniques, delay, timeout, oob_server, ai_cfg, wordlist, proxy, session);
+    #[test]
+    fn auto_oob_enables_out_of_band_technique() {
+        let techniques = auto_techniques(true);
+        assert!(techniques.contains(&SqliTechnique::OutOfBand));
+    }
 
-    match detector.ensure_authenticated().await {
-        Ok(()) => {
-            if detector.has_auth_session() {
-                eprintln!("[+] Login successful");
+    #[test]
+    fn bearer_auth_without_login_url_sets_authorization_header() {
+        let session = build_session_manager(
+            None,
+            false,
+            None,
+            Some("bearer".to_string()),
+            vec![],
+            None,
+            None,
+            Some("sekret".to_string()),
+            None,
+        )
+        .expect("session");
+
+        assert!(session.has_auth());
+    }
+
+    #[test]
+    fn basic_auth_without_login_url_sets_authorization_header() {
+        let session = build_session_manager(
+            None,
+            false,
+            None,
+            Some("basic".to_string()),
+            vec![],
+            Some("alice".to_string()),
+            Some("wonder".to_string()),
+            None,
+            None,
+        )
+        .expect("session");
+
+        assert!(session.has_auth());
+    }
+
+    #[test]
+    fn sql_subcommand_parses_custom_query_flags() {
+        let cli = Cli::parse_from([
+            "sqx",
+            "sql",
+            "http://target.local/item?id=1",
+            "--param",
+            "id",
+            "--query",
+            "SELECT version()",
+            "--dbms",
+            "mysql",
+            "--technique",
+            "time",
+        ]);
+
+        match cli.command {
+            Command::Sql {
+                url,
+                param,
+                query,
+                dbms,
+                technique,
+                ..
+            } => {
+                assert_eq!(url, "http://target.local/item?id=1");
+                assert_eq!(param, "id");
+                assert_eq!(query, "SELECT version()");
+                assert_eq!(dbms, "mysql");
+                assert_eq!(technique, "time");
             }
+            _ => panic!("expected sql subcommand"),
         }
-        Err(e) => eprintln!("⚠ Login failed — scanning unauthenticated: {}", e),
-    }
-
-    // Apply tamper chain via config patching — detector clone with chain
-    // (chain is passed to scan_with_strategy internally via fingerprint)
-    // For plain test_url, we apply tamper at the param level via auto_scan.
-    // For now, smart scan with tamper uses the fingerprint-derived chain.
-    let _ = tamper; // used in smart path via profile.strategy.tamper_chain
-
-    let findings = if smart {
-        match detector.scan_smart(&url).await {
-            Ok((profile, results)) => {
-                if let Some(waf) = &profile.waf {
-                    eprintln!("[*] WAF detected: {} (confidence {:.0}%)", waf.name, waf.confidence * 100.0);
-                }
-                if let Some(dbms) = &profile.dbms_hint {
-                    eprintln!("[*] DBMS hint: {}", dbms);
-                }
-                results
-            }
-            Err(e) => { eprintln!("[!] Scan error: {}", e); return; }
-        }
-    } else if let Some(body) = post_body {
-        let ct = post_ct.as_deref().unwrap_or("form");
-        match detector.test_url_post(&url, &body, ct).await {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[!] POST scan error: {}", e); return; }
-        }
-    } else {
-        match detector.test_url(&url).await {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[!] Scan error: {}", e); return; }
-        }
-    };
-
-    print_or_write_findings(&findings, &output, out_file.as_deref(), Some(&url));
-}
-
-async fn run_auto(
-    url: String,
-    smart: bool,
-    oob: bool,
-    oob_domain: Option<String>,
-    max_pages: usize,
-    max_depth: usize,
-    output: String,
-    out_file: Option<String>,
-    param_wordlist: Option<String>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-    ai_cfg: Option<AiAdvisorConfig>,
-) {
-    let oob_server = if oob {
-        build_oob_server(oob_domain, 8080).await
-    } else {
-        None
-    };
-
-    let wordlist = param_wordlist.map(|path| {
-        std::fs::read_to_string(&path)
-            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-            .unwrap_or_else(|e| { eprintln!("[!] Failed to read wordlist '{}': {}", path, e); Vec::new() })
-    });
-    let detector = build_detector(vec![
-        SqliTechnique::ErrorBased, SqliTechnique::BooleanBlind,
-        SqliTechnique::UnionBased, SqliTechnique::TimeBased,
-        SqliTechnique::StackedQueries,
-    ], 100, 30, oob_server, ai_cfg, wordlist, proxy, session);
-
-    match detector.ensure_authenticated().await {
-        Ok(()) => {
-            if detector.has_auth_session() {
-                eprintln!("[+] Login successful");
-            }
-        }
-        Err(e) => eprintln!("⚠ Login failed — scanning unauthenticated: {}", e),
-    }
-
-    let crawler_config = CrawlerConfig {
-        max_pages,
-        max_depth,
-        ..CrawlerConfig::default()
-    };
-    let pipeline_config = PipelineConfig { smart_scan: smart };
-
-    eprintln!("[*] Starting auto scan: {} (max_pages={}, max_depth={})", url, max_pages, max_depth);
-
-    match sqx_core::sqx::auto_scan(&url, detector, Some(crawler_config), Some(pipeline_config)).await {
-        Ok(results) => {
-            let total_findings: usize = results.iter().map(|r| r.findings.len()).sum();
-            eprintln!("[+] Scan complete: {} injection points found", total_findings);
-
-            // For structured formats, aggregate all findings into a single report
-            match output.as_str() {
-                "json" | "sarif" | "markdown" => {
-                    let all_findings: Vec<sqx_core::sqx::SqliTestResult> =
-                        results.iter().flat_map(|r| r.findings.clone()).collect();
-                    if !all_findings.is_empty() {
-                        print_or_write_findings(&all_findings, &output, out_file.as_deref(), Some(&url));
-                    }
-                }
-                _ => {
-                    for (i, result) in results.iter().enumerate() {
-                        if !result.findings.is_empty() {
-                            let result_url = result
-                                .profile
-                                .as_ref()
-                                .map(|p| p.url.as_str())
-                                .unwrap_or(&url);
-                            eprintln!("  [{}] {} findings — {:.1}s", i + 1, result.findings.len(), result.elapsed_secs);
-                            print_or_write_findings(&result.findings, &output, None, Some(result_url));
-                        }
-                    }
-                }
-            }
-        }
-        Err(e) => eprintln!("[!] Auto scan error: {}", e),
-    }
-}
-
-fn print_or_write_findings(
-    findings: &[sqx_core::sqx::SqliTestResult],
-    format: &str,
-    out_file: Option<&str>,
-    target_url: Option<&str>,
-) {
-    if findings.is_empty() {
-        eprintln!("[-] No SQL injection found.");
-        return;
-    }
-
-    let url = target_url.unwrap_or("unknown");
-    let content: String = match format {
-        "json" => {
-            serde_json::to_string_pretty(findings).unwrap_or_default()
-        }
-        "sarif" => {
-            serde_json::to_string_pretty(&sqx_core::sqx::reporting::SarifReport::from_findings(findings, url))
-                .unwrap_or_default()
-        }
-        "markdown" => {
-            sqx_core::sqx::reporting::MarkdownReport::from_findings(findings, url)
-        }
-        _ => {
-            // Plain text
-            let mut out = String::new();
-            for f in findings {
-                out.push_str(&format!(
-                    "[VULN] param={} technique={} confidence={:.0}%\n  payload: {}\n  evidence: {}\n",
-                    f.parameter,
-                    f.technique,
-                    f.confidence * 100.0,
-                    f.payload,
-                    f.evidence,
-                ));
-            }
-            out
-        }
-    };
-
-    match out_file {
-        Some(path) => {
-            if let Err(e) = std::fs::write(path, &content) {
-                eprintln!("[!] Failed to write output: {}", e);
-            } else {
-                eprintln!("[+] Output written to {}", path);
-            }
-        }
-        None => print!("{}", content),
-    }
-}
-
-async fn run_dump(
-    url: String,
-    param: String,
-    value: String,
-    dbms: String,
-    technique: String,
-    max_rows: usize,
-    output: String,
-    out_file: Option<String>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-    delay: u64,
-) {
-    let blind_technique = match technique.to_lowercase().as_str() {
-        "time" => BlindTechnique::Time,
-        _      => BlindTechnique::Boolean,
-    };
-
-    let config = SqliConfig {
-        proxy,
-        delay_ms: delay,
-        ..SqliConfig::default()
-    };
-    let mut detector = match SqliDetector::with_config(config) {
-        Ok(d) => d,
-        Err(e) => { eprintln!("[!] Failed to build detector: {}", e); return; }
-    };
-    if let Some(sess) = session {
-        detector = detector.with_session(sess);
-    }
-
-    match detector.ensure_authenticated().await {
-        Ok(()) => {
-            if detector.has_auth_session() {
-                eprintln!("[+] Login successful");
-            }
-        }
-        Err(e) => eprintln!("⚠ Login failed — scanning unauthenticated: {}", e),
-    }
-
-    eprintln!(
-        "[*] dump-all: {} param={} dbms={} technique={:?} max_rows={}",
-        url, param, dbms, blind_technique, max_rows
-    );
-
-    match detector.dump_all(&url, &param, &value, &dbms, blind_technique, max_rows, None, None).await {
-        Ok(result) => {
-            eprintln!(
-                "[+] Dump complete — {} table(s), {} requests, {:.1}s",
-                result.tables.len(), result.total_requests, result.elapsed_secs
-            );
-
-            let content = match output.as_str() {
-                "json" => serde_json::to_string_pretty(&result).unwrap_or_default(),
-                "csv"  => result.to_csv(),
-                _      => result.to_text(),
-            };
-
-            match out_file.as_deref() {
-                Some(path) => {
-                    if let Err(e) = std::fs::write(path, &content) {
-                        eprintln!("[!] Failed to write output: {}", e);
-                    } else {
-                        eprintln!("[+] Output written to {}", path);
-                    }
-                }
-                None => print!("{}", content),
-            }
-        }
-        Err(e) => eprintln!("[!] Dump error: {}", e),
-    }
-}
-
-async fn run_batch(
-    targets_file: String,
-    concurrency: usize,
-    smart: bool,
-    tech: Option<Vec<String>>,
-    tamper: Option<Vec<String>>,
-    delay: u64,
-    timeout: u64,
-    output: String,
-    out_file: Option<String>,
-    param_wordlist: Option<String>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-) {
-    // Read and parse targets file — one URL per line, skip blank lines and # comments
-    let raw = match std::fs::read_to_string(&targets_file) {
-        Ok(s) => s,
-        Err(e) => { eprintln!("[!] Cannot read targets file '{}': {}", targets_file, e); return; }
-    };
-
-    let urls: Vec<String> = raw
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.to_string())
-        .collect();
-
-    if urls.is_empty() {
-        eprintln!("[-] No targets found in '{}'", targets_file);
-        return;
-    }
-
-    eprintln!("[*] Batch scan: {} target(s), concurrency={}", urls.len(), concurrency);
-
-    let techniques = parse_techniques(tech);
-    let wordlist: Option<Vec<String>> = param_wordlist.map(|path| {
-        std::fs::read_to_string(&path)
-            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-            .unwrap_or_else(|e| { eprintln!("[!] Failed to read wordlist '{}': {}", path, e); Vec::new() })
-    });
-    let _ = tamper; // passed through smart scan path via fingerprint strategy
-
-    // Semaphore limits concurrent workers
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-    let mut join_set: tokio::task::JoinSet<(String, Vec<sqx_core::sqx::SqliTestResult>)> =
-        tokio::task::JoinSet::new();
-
-    for url in urls {
-        let permit = sem.clone().acquire_owned().await.unwrap();
-        let url_clone = url.clone();
-        let techniques_clone = techniques.clone();
-        let delay_clone = delay;
-        let timeout_clone = timeout;
-        let smart_clone = smart;
-        let wordlist_clone = wordlist.clone();
-        let proxy_clone = proxy.clone();
-        let session_clone = session.clone();
-
-        join_set.spawn(async move {
-            let _permit = permit; // released when this task ends
-
-            let config = SqliConfig {
-                techniques: techniques_clone,
-                delay_ms: delay_clone,
-                timeout_secs: timeout_clone,
-                param_wordlist: wordlist_clone.unwrap_or_else(|| SqliConfig::default().param_wordlist),
-                proxy: proxy_clone,
-                ..SqliConfig::default()
-            };
-
-            let mut detector = match SqliDetector::with_config(config) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("[!] {} — detector error: {}", url_clone, e);
-                    return (url_clone, vec![]);
-                }
-            };
-
-            if let Some(ref sess) = session_clone {
-                detector = detector.with_session(sess.clone());
-            }
-
-            match detector.ensure_authenticated().await {
-                Ok(()) => {
-                    if detector.has_auth_session() {
-                        eprintln!("[+] [{}] Login successful", url_clone);
-                    }
-                }
-                Err(e) => eprintln!("⚠ [{}] Login failed — scanning unauthenticated: {}", url_clone, e),
-            }
-
-            let findings = if smart_clone {
-                match detector.scan_smart(&url_clone).await {
-                    Ok((_, r)) => r,
-                    Err(e) => { eprintln!("[!] {} — {}", url_clone, e); vec![] }
-                }
-            } else {
-                match detector.test_url(&url_clone).await {
-                    Ok(r) => r,
-                    Err(e) => { eprintln!("[!] {} — {}", url_clone, e); vec![] }
-                }
-            };
-
-            if !findings.is_empty() {
-                eprintln!("[VULN] {} — {} finding(s)", url_clone, findings.len());
-            } else {
-                eprintln!("[ ok ] {}", url_clone);
-            }
-
-            (url_clone, findings)
-        });
-    }
-
-    // Collect results as tasks complete
-    let mut all_findings: Vec<(String, Vec<sqx_core::sqx::SqliTestResult>)> = Vec::new();
-    while let Some(res) = join_set.join_next().await {
-        if let Ok(entry) = res {
-            all_findings.push(entry);
-        }
-    }
-
-    let total_vulns: usize = all_findings.iter().map(|(_, f)| f.len()).sum();
-    let vuln_count = all_findings.iter().filter(|(_, f)| !f.is_empty()).count();
-    eprintln!(
-        "[+] Batch complete — {}/{} targets vulnerable, {} total findings",
-        vuln_count, all_findings.len(), total_vulns
-    );
-
-    // Format output
-    let content = match output.as_str() {
-        "json" => {
-            let map: std::collections::HashMap<&str, &Vec<sqx_core::sqx::SqliTestResult>> =
-                all_findings.iter().map(|(u, f)| (u.as_str(), f)).collect();
-            serde_json::to_string_pretty(&map).unwrap_or_default()
-        }
-        "sarif" => {
-            serde_json::to_string_pretty(&sqx_core::sqx::reporting::SarifReport::from_batch(&all_findings))
-                .unwrap_or_default()
-        }
-        "markdown" => {
-            sqx_core::sqx::reporting::MarkdownReport::from_batch(&all_findings)
-        }
-        _ => {
-            let mut out = String::new();
-            for (url, findings) in &all_findings {
-                if findings.is_empty() { continue; }
-                out.push_str(&format!("=== {} ===\n", url));
-                for f in findings {
-                    out.push_str(&format!(
-                        "  [VULN] param={} technique={} confidence={:.0}%\n  payload: {}\n  evidence: {}\n",
-                        f.parameter, f.technique, f.confidence * 100.0, f.payload, f.evidence,
-                    ));
-                }
-            }
-            if out.is_empty() { out.push_str("[-] No SQL injection found in any target.\n"); }
-            out
-        }
-    };
-
-    match out_file.as_deref() {
-        Some(path) => {
-            if let Err(e) = std::fs::write(path, &content) {
-                eprintln!("[!] Failed to write output: {}", e);
-            } else {
-                eprintln!("[+] Output written to {}", path);
-            }
-        }
-        None => print!("{}", content),
-    }
-}
-
-async fn run_file_read(
-    url: String,
-    param: String,
-    file: String,
-    dbms: String,
-    value: String,
-    out_file: Option<String>,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-) {
-    let config = sqx_core::sqx::SqliConfig {
-        proxy,
-        ..sqx_core::sqx::SqliConfig::default()
-    };
-    let mut detector = match sqx_core::sqx::SqliDetector::with_config(config) {
-        Ok(d) => d,
-        Err(e) => { eprintln!("[!] Failed to build detector: {}", e); return; }
-    };
-    if let Some(sess) = session {
-        detector = detector.with_session(sess);
-    }
-
-    eprintln!("[*] file-read: {} param={} file={} dbms={}", url, param, file, dbms);
-
-    match detector.file_read(&url, &param, &value, &dbms, &file).await {
-        Ok(result) => {
-            let content = if let Some(ref data) = result.content {
-                format!(
-                    "[+] File-read succeeded ({} requests)\n\nPayload: {}\n\nContent:\n{}\n",
-                    result.total_requests, result.payload_used, data
-                )
-            } else {
-                format!(
-                    "[-] File-read failed after {} requests. No readable content returned.\n",
-                    result.total_requests
-                )
-            };
-            match out_file {
-                Some(path) => {
-                    if let Err(e) = std::fs::write(&path, &content) {
-                        eprintln!("[!] Failed to write output: {}", e);
-                    } else {
-                        eprintln!("[+] Output written to {}", path);
-                    }
-                }
-                None => print!("{}", content),
-            }
-        }
-        Err(e) => eprintln!("[!] File-read error: {}", e),
-    }
-}
-
-async fn run_file_write(
-    url: String,
-    param: String,
-    file: String,
-    content: String,
-    dbms: String,
-    value: String,
-    proxy: Option<String>,
-    session: Option<Arc<SessionManager>>,
-) {
-    let config = sqx_core::sqx::SqliConfig {
-        proxy,
-        ..sqx_core::sqx::SqliConfig::default()
-    };
-    let mut detector = match sqx_core::sqx::SqliDetector::with_config(config) {
-        Ok(d) => d,
-        Err(e) => { eprintln!("[!] Failed to build detector: {}", e); return; }
-    };
-    if let Some(sess) = session {
-        detector = detector.with_session(sess);
-    }
-
-    eprintln!("[*] file-write: {} param={} file={} dbms={}", url, param, file, dbms);
-
-    match detector.file_write(&url, &param, &value, &dbms, &file, &content).await {
-        Ok(result) => {
-            if result.success {
-                eprintln!(
-                    "[+] File-write succeeded ({} requests)\nPayload: {}\nEvidence: {}",
-                    result.total_requests, result.payload_used, result.evidence
-                );
-            } else {
-                eprintln!(
-                    "[-] File-write failed after {} requests. {}",
-                    result.total_requests, result.evidence
-                );
-            }
-        }
-        Err(e) => eprintln!("[!] File-write error: {}", e),
     }
 }

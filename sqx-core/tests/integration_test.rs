@@ -9,10 +9,8 @@
 //!   - sqli-labs on http://localhost:8888
 //!   - DVWA on http://localhost:8889
 
-use sqx_core::sqx::{
-    SqliDetector, SqliConfig, SqliTechnique,
-};
 use sqx_core::sqx::session::SessionManager;
+use sqx_core::sqx::{SqliConfig, SqliDetector, SqliTechnique};
 use std::sync::Arc;
 
 fn build_detector(techniques: Vec<SqliTechnique>) -> SqliDetector {
@@ -49,7 +47,10 @@ fn merge_cookies(cookies: &mut Vec<(String, String)>, headers: &reqwest::header:
             if let Some(eq) = s.find('=') {
                 let name = s[..eq].trim();
                 let rest = &s[eq + 1..];
-                let value = rest.find(';').map(|i| rest[..i].trim()).unwrap_or(rest.trim());
+                let value = rest
+                    .find(';')
+                    .map(|i| rest[..i].trim())
+                    .unwrap_or(rest.trim());
                 if let Some(existing) = cookies.iter_mut().find(|(n, _)| n == name) {
                     existing.1 = value.to_string();
                 } else {
@@ -86,7 +87,10 @@ async fn dvwa_authenticated_detector(techniques: Vec<SqliTechnique>) -> SqliDete
     let setup_token = extract_dvwa_token(&setup_html).expect("DVWA setup token");
     let setup_resp = client
         .post("http://localhost:8889/setup.php")
-        .form(&[("create_db", "Create / Reset Database"), ("user_token", &setup_token)])
+        .form(&[
+            ("create_db", "Create / Reset Database"),
+            ("user_token", &setup_token),
+        ])
         .send()
         .await
         .expect("DVWA setup POST");
@@ -157,7 +161,9 @@ async fn sqli_labs_less1_error_based() {
     let url = sqli_labs_url("Less-1");
     let findings = detector.test_url(&url).await.expect("scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::ErrorBased),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::ErrorBased),
         "Expected error-based detection on Less-1"
     );
 }
@@ -169,7 +175,9 @@ async fn sqli_labs_less1_union_based() {
     let url = sqli_labs_url("Less-1");
     let findings = detector.test_url(&url).await.expect("scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::UnionBased),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::UnionBased),
         "Expected union-based detection on Less-1"
     );
 }
@@ -183,7 +191,9 @@ async fn sqli_labs_less5_boolean_blind() {
     let url = sqli_labs_url("Less-5");
     let findings = detector.test_url(&url).await.expect("scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::BooleanBlind),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::BooleanBlind),
         "Expected boolean-blind detection on Less-5"
     );
 }
@@ -197,7 +207,9 @@ async fn sqli_labs_less8_boolean_blind() {
     let url = sqli_labs_url("Less-8");
     let findings = detector.test_url(&url).await.expect("scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::BooleanBlind),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::BooleanBlind),
         "Expected boolean-blind detection on Less-8"
     );
 }
@@ -211,7 +223,9 @@ async fn sqli_labs_less9_time_based() {
     let url = sqli_labs_url("Less-9");
     let findings = detector.test_url(&url).await.expect("scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::TimeBased),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::TimeBased),
         "Expected time-based detection on Less-9"
     );
 }
@@ -224,9 +238,14 @@ async fn sqli_labs_less11_post_error_based() {
     let detector = build_detector(vec![SqliTechnique::ErrorBased]);
     let url = "http://localhost:8888/Less-11/".to_string();
     let body = "uname=admin&passwd=x";
-    let findings = detector.test_url_post(&url, body, "form").await.expect("post scan");
+    let findings = detector
+        .test_url_post(&url, body, "form")
+        .await
+        .expect("post scan");
     assert!(
-        findings.iter().any(|f| f.technique == SqliTechnique::ErrorBased),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::ErrorBased),
         "Expected error-based POST detection on Less-11"
     );
 }
@@ -238,13 +257,19 @@ async fn sqli_labs_less11_post_error_based() {
 async fn sqli_labs_file_read() {
     let detector = build_detector(vec![]);
     let url = sqli_labs_url("Less-1");
-    let result = detector.file_read(&url, "id", "1", "mysql", "/var/www/html/Less-1/index.php").await.expect("file read");
+    let result = detector
+        .file_read(&url, "id", "1", "mysql", "/var/www/html/Less-1/index.php")
+        .await
+        .expect("file read");
     assert!(
         result.content.is_some(),
         "Expected file-read to return content on Less-1"
     );
     let content = result.content.unwrap();
-    assert!(content.contains("<?php") || content.contains("<!DOCTYPE"), "Expected PHP file content");
+    assert!(
+        content.contains("<?php") || content.contains("<!DOCTYPE"),
+        "Expected PHP file content"
+    );
 }
 
 // ── sqli-labs: Smart scan end-to-end ────────────────────────────────────────
@@ -260,9 +285,18 @@ async fn sqli_labs_smart_scan_finds_vulns() {
     ]);
     let url = sqli_labs_url("Less-1");
     let (profile, findings) = detector.scan_smart(&url).await.expect("smart scan");
-    assert!(!findings.is_empty(), "Expected smart scan to find vulnerabilities on Less-1");
-    assert!(profile.dbms_hint.as_ref().map(|h| h.to_lowercase().contains("mysql")).unwrap_or(false),
-        "Expected DBMS hint to be MySQL");
+    assert!(
+        !findings.is_empty(),
+        "Expected smart scan to find vulnerabilities on Less-1"
+    );
+    assert!(
+        profile
+            .dbms_hint
+            .as_ref()
+            .map(|h| h.to_lowercase().contains("mysql"))
+            .unwrap_or(false),
+        "Expected DBMS hint to be MySQL"
+    );
 }
 
 // ── sqli-labs: Auto scan discovers injection points ─────────────────────────
@@ -282,15 +316,17 @@ async fn sqli_labs_auto_scan_discovers_points() {
     let crawler_config = sqx_core::sqx::crawler::CrawlerConfig {
         max_pages: 5,
         max_depth: 1,
-        exclude_patterns: vec![
-            r"index-\d+\.html".to_string(),
-            r"setup-db\.php".to_string(),
-        ],
+        exclude_patterns: vec![r"index-\d+\.html".to_string(), r"setup-db\.php".to_string()],
         ..sqx_core::sqx::crawler::CrawlerConfig::default()
     };
-    let results = sqx_core::sqx::auto_scan(&url, detector, Some(crawler_config), None).await.expect("auto scan");
+    let results = sqx_core::sqx::auto_scan(&url, detector, Some(crawler_config), None)
+        .await
+        .expect("auto scan");
     let total_findings: usize = results.iter().map(|r| r.findings.len()).sum();
-    assert!(total_findings > 0, "Expected auto scan to discover at least one injection point");
+    assert!(
+        total_findings > 0,
+        "Expected auto scan to discover at least one injection point"
+    );
 }
 
 // ── DVWA: GET SQL Injection (low security) ──────────────────────────────────
@@ -303,9 +339,10 @@ async fn dvwa_get_sqli_error_based() {
     let findings = detector.test_url(&url).await.expect("scan");
     // DVWA low security should be detectable via error-based or union-based
     assert!(
-        findings.iter().any(|f|
-            f.technique == SqliTechnique::ErrorBased || f.technique == SqliTechnique::UnionBased
-        ),
+        findings
+            .iter()
+            .any(|f| f.technique == SqliTechnique::ErrorBased
+                || f.technique == SqliTechnique::UnionBased),
         "Expected error-based or union-based detection on DVWA"
     );
 }

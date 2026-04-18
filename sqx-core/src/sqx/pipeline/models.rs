@@ -2,10 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::sqx::{
-    fingerprint::TargetProfile,
-    models::SqliTestResult,
-};
+use crate::sqx::{fingerprint::TargetProfile, models::SqliTestResult};
 
 /// Complete output of a `SqliDetector::scan_smart()` run, enriched with
 /// timing and coverage statistics needed by report generators.

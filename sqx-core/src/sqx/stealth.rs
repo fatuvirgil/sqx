@@ -64,7 +64,8 @@ pub fn random_accept_language() -> &'static str {
     let idx = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .subsec_nanos() as usize / 7)
+        .subsec_nanos() as usize
+        / 7)
         % ACCEPT_LANGUAGES.len();
     ACCEPT_LANGUAGES[idx]
 }
@@ -73,16 +74,24 @@ pub fn random_accept_language() -> &'static str {
 /// The UA is passed in separately (already chosen by the caller).
 pub fn browser_headers(referer: Option<&str>) -> Vec<(&'static str, String)> {
     let mut h: Vec<(&'static str, String)> = vec![
-        ("Accept",          ACCEPT_HTML.to_string()),
+        ("Accept", ACCEPT_HTML.to_string()),
         ("Accept-Language", random_accept_language().to_string()),
         ("Accept-Encoding", "gzip, deflate, br".to_string()),
-        ("Connection",      "keep-alive".to_string()),
+        ("Connection", "keep-alive".to_string()),
         ("Upgrade-Insecure-Requests", "1".to_string()),
-        ("Sec-Fetch-Dest",  "document".to_string()),
-        ("Sec-Fetch-Mode",  "navigate".to_string()),
-        ("Sec-Fetch-Site",  if referer.is_some() { "same-origin" } else { "none" }.to_string()),
-        ("Sec-Fetch-User",  "?1".to_string()),
-        ("DNT",             "1".to_string()),
+        ("Sec-Fetch-Dest", "document".to_string()),
+        ("Sec-Fetch-Mode", "navigate".to_string()),
+        (
+            "Sec-Fetch-Site",
+            if referer.is_some() {
+                "same-origin"
+            } else {
+                "none"
+            }
+            .to_string(),
+        ),
+        ("Sec-Fetch-User", "?1".to_string()),
+        ("DNT", "1".to_string()),
     ];
     if let Some(r) = referer {
         h.push(("Referer", r.to_string()));
@@ -115,7 +124,7 @@ pub fn jittered_delay(base_ms: u64, jitter_pct: u64) -> Duration {
         .subsec_nanos() as u64;
 
     let range = base_ms * jitter_pct / 100; // half-width of the jitter band
-    let offset = nanos % (range * 2 + 1);   // 0 .. 2*range inclusive
+    let offset = nanos % (range * 2 + 1); // 0 .. 2*range inclusive
     let ms = base_ms.saturating_sub(range) + offset;
     Duration::from_millis(ms)
 }

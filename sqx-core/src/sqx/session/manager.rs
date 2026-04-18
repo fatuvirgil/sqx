@@ -1,6 +1,6 @@
 use super::models::*;
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use anyhow::{Result, anyhow};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
 use reqwest::{Client, RequestBuilder};
 use std::collections::HashMap;
@@ -162,11 +162,17 @@ impl SessionManager {
     pub async fn refresh_csrf(&self, client: &Client) -> Result<()> {
         let (token_url, token_regex_str) = {
             let config = self.config.read().unwrap();
-            let csrf_config = config.csrf.as_ref()
+            let csrf_config = config
+                .csrf
+                .as_ref()
                 .ok_or_else(|| anyhow!("No CSRF config"))?;
-            let token_url = csrf_config.token_url.clone()
+            let token_url = csrf_config
+                .token_url
+                .clone()
                 .ok_or_else(|| anyhow!("No CSRF token URL"))?;
-            let token_regex_str = csrf_config.token_regex.clone()
+            let token_regex_str = csrf_config
+                .token_regex
+                .clone()
                 .ok_or_else(|| anyhow!("No CSRF token regex"))?;
             (token_url, token_regex_str)
         };
@@ -196,9 +202,7 @@ impl SessionManager {
         let needs_token = {
             let config = self.config.read().unwrap();
             let csrf_config = config.csrf.as_ref();
-            csrf_config
-                .and_then(|c| c.token_url.as_ref())
-                .is_some()
+            csrf_config.and_then(|c| c.token_url.as_ref()).is_some()
                 && csrf_config.and_then(|c| c.token_regex.as_ref()).is_some()
         };
 
@@ -233,18 +237,16 @@ impl SessionManager {
     pub async fn login(&self, client: &Client) -> Result<()> {
         let auth = {
             let config = self.config.read().unwrap();
-            config.auth.clone()
+            config
+                .auth
+                .clone()
                 .ok_or_else(|| anyhow!("No auth config"))?
         };
 
         match auth.method.as_str() {
             "form" => {
                 let resp = self
-                    .apply(
-                        client
-                            .post(&auth.login_url)
-                            .form(&auth.credentials),
-                    )
+                    .apply(client.post(&auth.login_url).form(&auth.credentials))
                     .send()
                     .await?;
                 self.update_from_response(&resp);
@@ -257,11 +259,7 @@ impl SessionManager {
             }
             "json" => {
                 let resp = self
-                    .apply(
-                        client
-                            .post(&auth.login_url)
-                            .json(&auth.credentials),
-                    )
+                    .apply(client.post(&auth.login_url).json(&auth.credentials))
                     .send()
                     .await?;
                 self.update_from_response(&resp);
@@ -283,10 +281,7 @@ impl SessionManager {
             "bearer" => {
                 if let Some(ref token) = auth.bearer_token {
                     let mut runtime = self.runtime_headers.write().unwrap();
-                    runtime.insert(
-                        "Authorization".to_string(),
-                        format!("Bearer {}", token),
-                    );
+                    runtime.insert("Authorization".to_string(), format!("Bearer {}", token));
                     debug!("Bearer token configured");
                 }
             }
@@ -380,7 +375,10 @@ impl SessionManager {
     }
 
     /// Detect known session cookies from Set-Cookie headers.
-    pub fn detect_session_cookies(&self, headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    pub fn detect_session_cookies(
+        &self,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Vec<(String, String)> {
         let config = self.config.read().unwrap();
         let known = &config.known_cookie_names;
         let mut found = Vec::new();
@@ -390,7 +388,10 @@ impl SessionManager {
                     let name = v[..eq].trim();
                     if known.iter().any(|k| k.eq_ignore_ascii_case(name)) {
                         let rest = &v[eq + 1..];
-                        let value = rest.find(';').map(|i| rest[..i].trim()).unwrap_or(rest.trim());
+                        let value = rest
+                            .find(';')
+                            .map(|i| rest[..i].trim())
+                            .unwrap_or(rest.trim());
                         found.push((name.to_string(), value.to_string()));
                     }
                 }

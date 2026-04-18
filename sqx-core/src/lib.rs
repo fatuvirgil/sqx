@@ -2,6 +2,10 @@
 //!
 //! This crate contains the engine without any UI dependencies (no CLI, no GUI).
 
+pub mod bench;
+pub mod intel;
 pub mod models;
-pub mod oob;
+// Note: OOB moved to sqx-pro
+// pub mod oob;
 pub mod sqx;
+pub mod validator;

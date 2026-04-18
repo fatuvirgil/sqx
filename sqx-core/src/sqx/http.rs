@@ -1,8 +1,8 @@
 //! HTTP utilities: POST body builder and timing helpers used by the scanner.
 
-use std::time::{Duration, Instant};
-use anyhow::Result;
 use crate::sqx::detector::SqliDetector;
+use anyhow::Result;
+use std::time::{Duration, Instant};
 
 impl SqliDetector {
     /// Measure baseline response time with statistical confidence.
@@ -20,7 +20,11 @@ impl SqliDetector {
             let start = Instant::now();
             let _ = self.send_request(url).await?;
             durations.push(start.elapsed());
-            tokio::time::sleep(crate::sqx::stealth::jittered_delay(self.config.delay_ms, self.config.stealth.jitter_pct)).await;
+            tokio::time::sleep(crate::sqx::stealth::jittered_delay(
+                self.config.delay_ms,
+                self.config.stealth.jitter_pct,
+            ))
+            .await;
         }
 
         let mean_nanos =
@@ -52,8 +56,6 @@ impl SqliDetector {
         sleep.clamp(2.0, 10.0) as u64
     }
 }
-
-
 
 /// Build a modified POST body with a specific parameter injected.
 ///

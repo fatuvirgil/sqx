@@ -26,9 +26,17 @@ pub fn vendor_bypass_chains(waf_name: &str) -> Vec<Vec<String>> {
         // ModSecurity (OWASP CRS): very sensitive to UNION/SELECT signatures,
         // but comment evasion + versioned keywords + hex often slip through.
         vec![
-            vec!["space_to_comment".into(), "randomcase".into(), "hex_encode".into()],
+            vec![
+                "space_to_comment".into(),
+                "randomcase".into(),
+                "hex_encode".into(),
+            ],
             vec!["modsecurityzeroversioned".into(), "randomcase".into()],
-            vec!["inline_comment".into(), "randomcase".into(), "space_to_comment".into()],
+            vec![
+                "inline_comment".into(),
+                "randomcase".into(),
+                "space_to_comment".into(),
+            ],
             vec!["null_byte".into(), "space_to_comment".into()],
             vec!["mysql_version_comment".into(), "randomcase".into()],
             vec!["versionedkeywords".into(), "space_to_comment".into()],
@@ -53,26 +61,42 @@ pub fn vendor_bypass_chains(waf_name: &str) -> Vec<Vec<String>> {
         ]
     } else if name_lower.contains("aws") || name_lower.contains("awswaf") {
         vec![
-            vec!["urlencode".into(), "space_to_tab".into(), "randomcase".into()],
+            vec![
+                "urlencode".into(),
+                "space_to_tab".into(),
+                "randomcase".into(),
+            ],
             vec!["inline_comment".into(), "urlencode".into()],
             vec!["space_to_whitespace_mix".into(), "randomcase".into()],
             vec!["double_urlencode".into(), "space_to_tab".into()],
         ]
     } else if name_lower.contains("sucuri") {
         vec![
-            vec!["randomcase".into(), "space_to_comment".into(), "urlencode".into()],
+            vec![
+                "randomcase".into(),
+                "space_to_comment".into(),
+                "urlencode".into(),
+            ],
             vec!["inline_comment".into(), "randomcase".into()],
             vec!["double_urlencode".into(), "space_to_comment".into()],
         ]
     } else if name_lower.contains("f5") || name_lower.contains("big-ip") {
         vec![
-            vec!["double_urlencode".into(), "space_to_tab".into(), "null_byte".into()],
+            vec![
+                "double_urlencode".into(),
+                "space_to_tab".into(),
+                "null_byte".into(),
+            ],
             vec!["null_byte".into(), "space_to_comment".into()],
             vec!["randomcase".into(), "space_to_tab".into()],
         ]
     } else if name_lower.contains("forti") || name_lower.contains("fortigate") {
         vec![
-            vec!["urlencode".into(), "randomcase".into(), "inline_comment".into()],
+            vec![
+                "urlencode".into(),
+                "randomcase".into(),
+                "inline_comment".into(),
+            ],
             vec!["space_to_comment".into(), "randomcase".into()],
             vec!["hex_encode".into(), "space_to_comment".into()],
         ]
@@ -100,7 +124,10 @@ pub fn generic_escalation() -> Vec<Vec<String>> {
 }
 
 /// Merge vendor-specific chains with generic escalation, deduplicating.
-pub fn build_escalation_list(waf_name: Option<&str>, waf_recommended: &[String]) -> Vec<Vec<String>> {
+pub fn build_escalation_list(
+    waf_name: Option<&str>,
+    waf_recommended: &[String],
+) -> Vec<Vec<String>> {
     let mut seen = std::collections::HashSet::new();
     let mut list: Vec<Vec<String>> = Vec::new();
 

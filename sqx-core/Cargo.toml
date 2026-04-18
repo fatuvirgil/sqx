@@ -24,6 +24,20 @@ tokio-stream = { workspace = true }
 async-trait  = { workspace = true }
 axum         = { workspace = true }
 
+# IntelCollector + PayloadValidator dependencies
+sqlparser    = "0.52"
+sled         = "0.34"
+strsim       = "0.11"
+
+# Headless browser crawler
+chromiumoxide = { version = "0.9", default-features = false }
+which = "6.0"
+thiserror = "1.0"
+futures-util = "0.3"
+
+[dev-dependencies]
+wiremock     = "0.6"
+
 [profile.release]
 opt-level   = 3
 lto         = true
