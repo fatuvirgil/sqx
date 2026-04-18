@@ -296,7 +296,7 @@ enum Command {
         /// Path to targets file
         targets: String,
 
-        /// Concurrent workers (default: 5, max 5 in Core, unlimited in Pro)
+        /// Concurrent workers (default: 5)
         #[arg(long, default_value = "5")]
         concurrency: usize,
 

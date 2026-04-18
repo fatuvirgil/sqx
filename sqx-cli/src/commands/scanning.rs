@@ -379,29 +379,17 @@ pub(crate) async fn run_batch(
         return;
     }
 
-    // Core limitation: max 5 concurrent batch scans (Pro has unlimited)
-    const MAX_CORE_CONCURRENCY: usize = 5;
-    let actual_concurrency = concurrency.min(MAX_CORE_CONCURRENCY);
-    
-    if concurrency > MAX_CORE_CONCURRENCY {
-        eprintln!(
-            "[!] Concurrency limited to {} in Core (requested: {}). Upgrade to Pro for unlimited.",
-            MAX_CORE_CONCURRENCY,
-            concurrency
-        );
-    }
-    
     eprintln!(
         "[*] Batch scan: {} target(s), concurrency={}",
         urls.len(),
-        actual_concurrency
+        concurrency
     );
 
     let techniques = parse_techniques(tech);
     let wordlist = read_wordlist(param_wordlist);
     let tamper_chain = Arc::new(build_user_tamper_chain(tamper));
 
-    let sem = Arc::new(tokio::sync::Semaphore::new(actual_concurrency));
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut join_set: tokio::task::JoinSet<(String, Vec<sqx_core::sqx::SqliTestResult>)> =
         tokio::task::JoinSet::new();
 
