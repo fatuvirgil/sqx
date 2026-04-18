@@ -34,7 +34,7 @@ SQX is a powerful SQL injection scanner that combines speed, intelligence, and c
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sqx.git
+git clone https://github.com/fatuvirgil/sqx.git
 cd sqx
 
 # Build release binary (optimized)
@@ -69,7 +69,7 @@ docker run -d -p 8080:80 --name sqli-labs acgpiano/sqli-labs:latest
 
 ```bash
 # Install from source
-git clone https://github.com/yourusername/sqx.git
+git clone https://github.com/fatuvirgil/sqx.git
 cd sqx
 cargo build --release
 
