@@ -49,9 +49,11 @@ cargo build --release
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Linux x86_64 | ✅ Supported | Primary development platform |
-| macOS x86_64/ARM64 | ✅ Supported | Tested on Apple Silicon |
-| Windows x86_64 | ⚠️ Should work | Not actively tested |
+| Linux x86_64 | ✅ Tested | Primary development platform |
+| macOS x86_64/ARM64 | ⚠️ Not tested | Should work (Rust cross-platform) |
+| Windows x86_64 | ⚠️ Not tested | Should work (Rust cross-platform) |
+
+**Contributions welcome!** If you test on macOS/Windows, please open an issue with your results.
 
 ### Docker (for testing)
 
