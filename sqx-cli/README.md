@@ -9,7 +9,7 @@ The SQX CLI provides a comprehensive command-line interface for SQL injection de
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/sqx.git
+git clone https://github.com/fatuvirgil/sqx.git
 cd sqx
 cargo build --release --bin sqx
 

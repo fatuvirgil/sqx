@@ -21,7 +21,7 @@ Thank you for your interest in contributing to SQX! This document provides guide
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sqx.git
+git clone https://github.com/fatuvirgil/sqx.git
 cd sqx
 
 # Build the project
