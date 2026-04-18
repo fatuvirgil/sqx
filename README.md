@@ -276,4 +276,4 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
-**Made with ⚡ by the SQX Team**
+**Intelexia Team**
