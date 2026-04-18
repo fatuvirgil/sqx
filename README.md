@@ -18,6 +18,50 @@ SQX is a powerful SQL injection scanner that combines speed, intelligence, and c
 - **🛡️ Evasive**: 69 built-in tamper scripts (more than sqlmap's ~40)
 - **🔧 Complete**: Detection, exploitation, and data extraction in one tool
 - **📊 Integrated**: SARIF output for GitHub Advanced Security
+- **💯 Free**: Open source, no restrictions
+
+## Installation
+
+### Prerequisites
+
+- **Rust** 1.85+ ([Install Rust](https://rustup.rs/))
+- **OpenSSL** development libraries (for TLS support)
+  - Debian/Ubuntu: `sudo apt install libssl-dev pkg-config`
+  - macOS: `brew install openssl pkg-config`
+  - Windows: Install via [vcpkg](https://vcpkg.io/) or use prebuilt binaries
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/sqx.git
+cd sqx
+
+# Build release binary (optimized)
+cargo build --release
+
+# Binary will be at:
+# Linux/macOS: ./target/release/sqx
+# Windows: .\target\release\sqx.exe
+```
+
+### Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Linux x86_64 | ✅ Supported | Primary development platform |
+| macOS x86_64/ARM64 | ✅ Supported | Tested on Apple Silicon |
+| Windows x86_64 | ⚠️ Should work | Not actively tested |
+
+### Docker (for testing)
+
+```bash
+# Run sqli-labs for local testing
+docker run -d -p 8080:80 --name sqli-labs acgpiano/sqli-labs:latest
+
+# Then test SQX
+./target/release/sqx scan "http://localhost:8080/Less-1/?id=1"
+```
 
 ## Quick Start
 
@@ -98,7 +142,7 @@ sqx sql "http://target.com/page.php?id=1" --param id --query "SELECT user()"
 ### Batch Scanning
 
 ```bash
-# Scan multiple targets (max 5 concurrent in Core)
+# Scan multiple targets
 sqx batch targets.txt --concurrency 5 --smart
 
 # Output formats
@@ -109,20 +153,9 @@ sqx scan "http://target.com/?id=1" --output sarif --out-file results.sarif
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        SQX Workspace                         │
-├──────────────────┬──────────────────┬───────────────────────┤
-│   sqx-core       │   sqx-cli        │   sqx-pro             │
-│   (Open Source)  │   (Open Source)  │   (Commercial)        │
-├──────────────────┼──────────────────┼───────────────────────┤
-│ • Detection      │ • CLI interface  │ • GUI (egui)          │
-│ • 69 Tampers     │ • All Core cmds  │ • Headless browser    │
-│ • SQL/OS Shells  │ • Batch scanning │ • OOB Server          │
-│ • File R/W       │ • Reporting      │ • Second-order SQLi   │
-│ • Crawler        │                  │ • Team collaboration  │
-│ • AI (Ollama)    │                  │ • PDF Reports         │
-│ • Extraction     │                  │ • CI/CD Integration   │
-└──────────────────┴──────────────────┴───────────────────────┘
+sqx/
+├── sqx-core/    # Detection engine library
+└── sqx-cli/     # CLI binary
 ```
 
 ## Commands
@@ -132,7 +165,7 @@ sqx scan       Scan a GET URL for SQL injection
 sqx post       Scan a POST endpoint
 sqx auto       Spider → fingerprint → scan all injection points
 sqx dump       Extract full database from vulnerable endpoint
-sqx batch      Multi-target scanning (max 5 concurrent)
+sqx batch      Multi-target scanning
 sqx sql-shell  Interactive SQL shell
 sqx os-shell   Interactive OS command shell
 sqx file-read  Read remote files via SQL injection
@@ -153,7 +186,7 @@ sqx replay     Replay request from file
 sqx scan "http://target.com/?id=1" --ai-advisor --ai-model ollama:llama3.2
 ```
 
-### Cloud (User's API Key)
+### Cloud (Your API Key)
 ```bash
 # Claude (requires --ai-consent for data sharing)
 sqx scan "http://target.com/?id=1" --ai-advisor \
@@ -214,27 +247,6 @@ sqx scan "http://target.com/?id=1" --output sarif --out-file results.sarif
 # Upload results.sarif to GitHub Security tab
 ```
 
-## Core vs Pro
-
-| Feature | Core (Free) | Pro (Paid) |
-|---------|-------------|------------|
-| Detection techniques | ✅ All | ✅ All |
-| Tamper scripts | ✅ 69 | ✅ 69 |
-| SQL/OS Shells | ✅ Interactive | ✅ Interactive |
-| File R/W | ✅ | ✅ |
-| AI (Local) | ✅ Ollama | ✅ Ollama |
-| AI (Cloud) | ✅* | ✅ |
-| Batch concurrency | ✅ Max 5 | ✅ Unlimited |
-| GUI | ❌ | ✅ Native |
-| Headless browser | ❌ | ✅ Chrome-based |
-| OOB Server | ❌ | ✅ DNS/HTTP callbacks |
-| Second-order SQLi | ❌ | ✅ Stored injection |
-| Markdown reports | ❌ | ✅ |
-| Team features | ❌ | ✅ Shared sessions |
-| CI/CD integration | ❌ | ✅ GitHub/GitLab |
-
-*Cloud AI in Core requires user's own API key
-
 ## Security & Ethics
 
 **⚠️ WARNING: For Authorized Testing Only**
@@ -245,13 +257,11 @@ sqx scan "http://target.com/?id=1" --output sarif --out-file results.sarif
 
 ## License
 
-SQX Core and SQX CLI are dual-licensed under:
+SQX is dual-licensed under:
 - MIT License
 - Apache License 2.0
 
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
-
-SQX Pro is commercial software with a proprietary license.
 
 ## Contributing
 

@@ -3,9 +3,6 @@ members = [
     # Core (Open Source / Free)
     "sqx-core",         # Detection engine
     "sqx-cli",          # CLI interface
-    
-    # Pro (Commercial)
-    "sqx-pro",          # GUI + headless + OOB + second-order + team
 ]
 resolver = "3"
 
@@ -32,10 +29,5 @@ base64       = "0.22"
 lazy_static  = "1"
 tokio-stream = "0.1"
 async-trait  = "0.1"
-which        = "6"
 axum         = "0.8"
 clap         = { version = "4", features = ["derive", "color"] }
-eframe       = { version = "0.30", features = ["default_fonts"] }
-egui         = "0.30"
-egui_extras  = "0.30"
-arboard      = "3"
