@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 use crate::commands::extraction::run_dump;
 use crate::commands::intel::run_intel;
 use crate::commands::scanning::{
-    auto_techniques, build_user_tamper_chain, run_auto, run_batch, run_scan,
+    auto_techniques, build_user_tamper_chain, run_auto, run_scan,
 };
 use crate::commands::takeover::{run_custom_sql, run_file_read, run_file_write};
 use crate::commands::validate::run_validate;
@@ -289,48 +289,6 @@ enum Command {
         /// Write output to file instead of stdout
         #[arg(long, short = 'o')]
         out_file: Option<String>,
-    },
-
-    /// Batch scan multiple targets from a file (one URL per line, # comments ignored)
-    Batch {
-        /// Path to targets file
-        targets: String,
-
-        /// Concurrent workers (default: 5)
-        #[arg(long, default_value = "5")]
-        concurrency: usize,
-
-        /// Use smart scan (behavioral fingerprinting) per target
-        #[arg(long)]
-        smart: bool,
-
-        /// Techniques: error, blind, union, time, stacked, oob (comma-separated)
-        #[arg(long, value_delimiter = ',')]
-        tech: Option<Vec<String>>,
-
-        /// Tamper scripts (comma-separated)
-        #[arg(long, value_delimiter = ',')]
-        tamper: Option<Vec<String>>,
-
-        /// Request delay in ms
-        #[arg(long, default_value = "100")]
-        delay: u64,
-
-        /// Request timeout in seconds
-        #[arg(long, default_value = "30")]
-        timeout: u64,
-
-        /// Output format: text, json
-        #[arg(long, default_value = "text")]
-        output: String,
-
-        /// Write aggregated output to file
-        #[arg(long, short = 'o')]
-        out_file: Option<String>,
-
-        /// Custom parameter wordlist file (one per line) for fuzzing URLs without query strings
-        #[arg(long)]
-        param_wordlist: Option<String>,
     },
 
     /// List available tamper scripts
@@ -731,34 +689,6 @@ impl Cli {
                 run_dump(
                     url, param, value, dbms, technique, max_rows, output, out_file, proxy, session,
                     delay,
-                )
-                .await;
-            }
-            Command::Batch {
-                targets,
-                concurrency,
-                smart,
-                tech,
-                tamper,
-                delay,
-                timeout,
-                output,
-                out_file,
-                param_wordlist,
-            } => {
-                run_batch(
-                    targets,
-                    concurrency,
-                    smart,
-                    tech,
-                    tamper,
-                    delay,
-                    timeout,
-                    output,
-                    out_file,
-                    param_wordlist,
-                    proxy,
-                    session,
                 )
                 .await;
             }

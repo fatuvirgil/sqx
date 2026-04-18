@@ -141,14 +141,13 @@ sqx file-read "http://target.com/page.php?id=1" --param id --file "/etc/passwd"
 sqx sql "http://target.com/page.php?id=1" --param id --query "SELECT user()"
 ```
 
-### Batch Scanning
+### Output Formats
 
 ```bash
-# Scan multiple targets
-sqx batch targets.txt --concurrency 5 --smart
-
-# Output formats
+# JSON output
 sqx scan "http://target.com/?id=1" --output json --out-file results.json
+
+# SARIF for GitHub Advanced Security
 sqx scan "http://target.com/?id=1" --output sarif --out-file results.sarif
 ```
 
@@ -167,7 +166,6 @@ sqx scan       Scan a GET URL for SQL injection
 sqx post       Scan a POST endpoint
 sqx auto       Spider → fingerprint → scan all injection points
 sqx dump       Extract full database from vulnerable endpoint
-sqx batch      Multi-target scanning
 sqx sql-shell  Interactive SQL shell
 sqx os-shell   Interactive OS command shell
 sqx file-read  Read remote files via SQL injection

@@ -36,9 +36,6 @@ sqx post "http://target.com/login" --body "user=admin&pass=test'" --ct form
 # Full auto scan with crawling
 sqx auto "http://target.com/" --smart --max-pages 50
 
-# Batch scan multiple targets
-sqx batch targets.txt --concurrency 5 --smart
-
 # Interactive SQL shell
 sqx sql-shell "http://target.com/page.php?id=1" --param id --dbms mysql
 
@@ -187,40 +184,6 @@ sqx auto "http://target.com/" --smart --ai-advisor
 ```
 
 **Note:** `--headless` requires SQX Pro (Chrome-based SPA crawling).
-
-### `batch` — Multi-Target Scanning
-
-Scan multiple targets from a file.
-
-```bash
-sqx batch [OPTIONS] <TARGETS_FILE>
-
-Options:
-      --concurrency <N>     Concurrent workers [default: 5]
-      --smart               Use smart scan
-      --tech <TECH>         Techniques
-      --tamper <TAMPER>     Tamper scripts
-      --delay <DELAY>       Request delay
-      --timeout <TIMEOUT>   Request timeout
-      --output <OUTPUT>     Output format
-```
-
-**Limits:** Core is limited to 5 concurrent workers. Use SQX Pro for unlimited concurrency.
-
-**Examples:**
-
-```bash
-# Create targets file
-cat > targets.txt << 'EOF'
-http://target1.com/page.php?id=1
-http://target2.com/search?q=test
-# Comments are ignored
-http://target3.com/product?id=5
-EOF
-
-# Batch scan
-sqx batch targets.txt --concurrency 5 --smart --output json
-```
 
 ### `sql-shell` — Interactive SQL Shell
 
