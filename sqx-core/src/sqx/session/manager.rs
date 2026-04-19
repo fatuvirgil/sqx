@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
 use reqwest::{Client, RequestBuilder};
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 /// How often to auto-refresh CSRF tokens (30 seconds).
@@ -100,11 +100,11 @@ impl SessionManager {
 
     /// Apply session state to a request builder.
     /// Call this on every outgoing request.
-    pub fn apply(&self, builder: RequestBuilder) -> RequestBuilder {
+    pub async fn apply(&self, builder: RequestBuilder) -> RequestBuilder {
         let mut b = builder;
 
         // Apply cookies
-        let cookies = self.cookies.read().unwrap();
+        let cookies = self.cookies.read().await;
         if !cookies.is_empty() {
             let cookie_str: String = cookies
                 .iter()
@@ -113,22 +113,24 @@ impl SessionManager {
                 .join("; ");
             b = b.header("Cookie", cookie_str);
         }
+        drop(cookies);
 
         // Apply static custom headers
-        let config = self.config.read().unwrap();
+        let config = self.config.read().await;
         for (name, value) in &config.headers {
             b = b.header(name.as_str(), value.as_str());
         }
 
         // Apply runtime headers (e.g., dynamic Authorization)
-        let runtime = self.runtime_headers.read().unwrap();
+        let runtime = self.runtime_headers.read().await;
         for (name, value) in runtime.iter() {
             b = b.header(name.as_str(), value.as_str());
         }
+        drop(runtime);
 
         // Apply CSRF token
         if let Some(ref csrf_config) = config.csrf {
-            if let Some(ref token) = *self.csrf_token.read().unwrap() {
+            if let Some(ref token) = *self.csrf_token.read().await {
                 if let Some(ref header_name) = csrf_config.header_name {
                     b = b.header(header_name.as_str(), token.as_str());
                 }
@@ -139,8 +141,8 @@ impl SessionManager {
     }
 
     /// Update cookies from a response's Set-Cookie headers.
-    pub fn update_from_response(&self, response: &reqwest::Response) {
-        let mut cookies = self.cookies.write().unwrap();
+    pub async fn update_from_response(&self, response: &reqwest::Response) {
+        let mut cookies = self.cookies.write().await;
         for cookie_header in response.headers().get_all("set-cookie") {
             if let Ok(val) = cookie_header.to_str() {
                 // Parse "name=value; path=/; ..." — only need name=value
@@ -160,8 +162,8 @@ impl SessionManager {
 
     /// Refresh CSRF token by fetching from token_url and extracting with regex.
     pub async fn refresh_csrf(&self, client: &Client) -> Result<()> {
-        let (token_url, token_regex_str) = {
-            let config = self.config.read().unwrap();
+        let (token_url, token_regex_str): (String, String) = {
+            let config = self.config.read().await;
             let csrf_config = config
                 .csrf
                 .as_ref()
@@ -177,15 +179,28 @@ impl SessionManager {
             (token_url, token_regex_str)
         };
 
-        let resp = self.apply(client.get(&token_url)).send().await?;
-        self.update_from_response(&resp);
+        let resp = self.apply(client.get(&token_url)).await.send().await?;
+        self.update_from_response(&resp).await;
         let body = resp.text().await?;
 
-        let re = Regex::new(&token_regex_str)?;
+        // Prevent ReDoS: limit regex size and use bounded compilation
+        const MAX_REGEX_SIZE: usize = 1024;
+        if token_regex_str.len() > MAX_REGEX_SIZE {
+            return Err(anyhow!(
+                "CSRF token regex too long (max {} characters)",
+                MAX_REGEX_SIZE
+            ));
+        }
+        // Use RegexBuilder to set a size limit for the compiled regex
+        let re = regex::RegexBuilder::new(&token_regex_str)
+            .size_limit(64 * 1024) // 64KB limit for compiled regex
+            .build()
+            .map_err(|e| anyhow!("Invalid CSRF token regex: {}", e))?;
         if let Some(captures) = re.captures(&body) {
             if let Some(token) = captures.get(1) {
-                let mut csrf = self.csrf_token.write().unwrap();
+                let mut csrf = self.csrf_token.write().await;
                 *csrf = Some(token.as_str().to_string());
+                drop(csrf);
                 debug!("CSRF token refreshed");
                 return Ok(());
             }
@@ -200,7 +215,7 @@ impl SessionManager {
     /// Only refreshes if `CSRF_REFRESH_INTERVAL` has elapsed.
     pub async fn maybe_refresh_csrf(&self, client: &Client) {
         let needs_token = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().await;
             let csrf_config = config.csrf.as_ref();
             csrf_config.and_then(|c| c.token_url.as_ref()).is_some()
                 && csrf_config.and_then(|c| c.token_regex.as_ref()).is_some()
@@ -212,8 +227,8 @@ impl SessionManager {
 
         // Check if refresh is needed
         {
-            let last = self.last_csrf_refresh.read().unwrap();
-            let has_existing_token = self.csrf_token.read().unwrap().is_some();
+            let last = self.last_csrf_refresh.read().await;
+            let has_existing_token = self.csrf_token.read().await.is_some();
 
             // If we already have a token and it's fresh enough, skip
             if has_existing_token {
@@ -227,7 +242,7 @@ impl SessionManager {
 
         // Attempt refresh (ignore errors — token may still be valid)
         if self.refresh_csrf(client).await.is_ok() {
-            let mut last = self.last_csrf_refresh.write().unwrap();
+            let mut last = self.last_csrf_refresh.write().await;
             *last = Some(Instant::now());
         }
     }
@@ -236,7 +251,7 @@ impl SessionManager {
     /// After successful login, session cookies/headers are updated for subsequent requests.
     pub async fn login(&self, client: &Client) -> Result<()> {
         let auth = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().await;
             config
                 .auth
                 .clone()
@@ -247,6 +262,7 @@ impl SessionManager {
             "form" => {
                 let resp = self
                     .apply(client.post(&auth.login_url).form(&auth.credentials))
+                    .await
                     .send()
                     .await?;
                 self.update_from_response(&resp);
@@ -260,6 +276,7 @@ impl SessionManager {
             "json" => {
                 let resp = self
                     .apply(client.post(&auth.login_url).json(&auth.credentials))
+                    .await
                     .send()
                     .await?;
                 self.update_from_response(&resp);
@@ -274,14 +291,16 @@ impl SessionManager {
                 let user = auth.basic_username.as_deref().unwrap_or("");
                 let pass = auth.basic_password.as_deref().unwrap_or("");
                 let encoded = STANDARD.encode(format!("{}:{}", user, pass));
-                let mut runtime = self.runtime_headers.write().unwrap();
+                let mut runtime = self.runtime_headers.write().await;
                 runtime.insert("Authorization".to_string(), format!("Basic {}", encoded));
+                drop(runtime);
                 debug!("Basic auth configured for user: {}", user);
             }
             "bearer" => {
                 if let Some(ref token) = auth.bearer_token {
-                    let mut runtime = self.runtime_headers.write().unwrap();
+                    let mut runtime = self.runtime_headers.write().await;
                     runtime.insert("Authorization".to_string(), format!("Bearer {}", token));
+                    drop(runtime);
                     debug!("Bearer token configured");
                 }
             }
@@ -330,56 +349,56 @@ impl SessionManager {
     }
 
     /// Get current cookie value by name.
-    pub fn get_cookie(&self, name: &str) -> Option<String> {
-        self.cookies.read().unwrap().get(name).cloned()
+    pub async fn get_cookie(&self, name: &str) -> Option<String> {
+        self.cookies.read().await.get(name).cloned()
     }
 
     /// Get current CSRF token.
-    pub fn get_csrf_token(&self) -> Option<String> {
-        self.csrf_token.read().unwrap().clone()
+    pub async fn get_csrf_token(&self) -> Option<String> {
+        self.csrf_token.read().await.clone()
     }
 
     /// Set a runtime header (e.g., dynamic Authorization token).
-    pub fn set_header(&self, name: &str, value: &str) {
-        let mut runtime = self.runtime_headers.write().unwrap();
+    pub async fn set_header(&self, name: &str, value: &str) {
+        let mut runtime = self.runtime_headers.write().await;
         runtime.insert(name.to_string(), value.to_string());
     }
 
     /// Check if session is still valid (has cookies set).
-    pub fn is_authenticated(&self) -> bool {
-        !self.cookies.read().unwrap().is_empty()
+    pub async fn is_authenticated(&self) -> bool {
+        !self.cookies.read().await.is_empty()
     }
 
     /// Returns true if auto-detect is enabled.
-    pub fn is_auto_detect_enabled(&self) -> bool {
-        self.config.read().unwrap().auto_detect
+    pub async fn is_auto_detect_enabled(&self) -> bool {
+        self.config.read().await.auto_detect
     }
 
     /// Returns true if an auth config is present.
-    pub fn has_auth(&self) -> bool {
-        self.config.read().unwrap().auth.is_some()
+    pub async fn has_auth(&self) -> bool {
+        self.config.read().await.auth.is_some()
     }
 
     /// Update authentication configuration.
-    pub fn update_auth_config(&self, auth: AuthConfig) {
-        let mut config = self.config.write().unwrap();
+    pub async fn update_auth_config(&self, auth: AuthConfig) {
+        let mut config = self.config.write().await;
         config.auth = Some(auth);
     }
 
     /// Insert multiple cookies into the jar.
-    pub fn insert_cookies(&self, new_cookies: &[(String, String)]) {
-        let mut cookies = self.cookies.write().unwrap();
+    pub async fn insert_cookies(&self, new_cookies: &[(String, String)]) {
+        let mut cookies = self.cookies.write().await;
         for (name, value) in new_cookies {
             cookies.insert(name.clone(), value.clone());
         }
     }
 
     /// Detect known session cookies from Set-Cookie headers.
-    pub fn detect_session_cookies(
+    pub async fn detect_session_cookies(
         &self,
         headers: &reqwest::header::HeaderMap,
     ) -> Vec<(String, String)> {
-        let config = self.config.read().unwrap();
+        let config = self.config.read().await;
         let known = &config.known_cookie_names;
         let mut found = Vec::new();
         for h in headers.get_all("set-cookie") {

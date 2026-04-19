@@ -37,6 +37,9 @@ const FETCH_SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Maximum allowed file size for downloaded payloads (10 MB).
+const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
+
 /// Fetch all payload sources and cache them locally.
 pub async fn fetch_and_cache() -> Result<()> {
     let dir = cache_dir().ok_or_else(|| anyhow!("Cannot determine cache dir"))?;
@@ -53,7 +56,22 @@ pub async fn fetch_and_cache() -> Result<()> {
         eprint!("  {:30} ", filename);
         match client.get(*url).send().await {
             Ok(r) if r.status().is_success() => {
+                // Check content length before downloading
+                if let Some(content_length) = r.content_length() {
+                    if content_length > MAX_PAYLOAD_SIZE as u64 {
+                        eprintln!("✗ File too large ({} > {} bytes)", content_length, MAX_PAYLOAD_SIZE);
+                        continue;
+                    }
+                }
+                
                 let body = r.text().await?;
+                
+                // Verify size limit after download (defense in depth)
+                if body.len() > MAX_PAYLOAD_SIZE {
+                    eprintln!("✗ File too large ({} > {} bytes)", body.len(), MAX_PAYLOAD_SIZE);
+                    continue;
+                }
+                
                 std::fs::write(dir.join(filename), &body)?;
                 eprintln!("✓");
             }
@@ -68,7 +86,20 @@ pub async fn fetch_and_cache() -> Result<()> {
     eprint!("  {:30} ", "boundaries.xml");
     if let Ok(r) = client.get(b_url).send().await {
         if r.status().is_success() {
+            // Check content length before downloading
+            if let Some(content_length) = r.content_length() {
+                if content_length > MAX_PAYLOAD_SIZE as u64 {
+                    eprintln!("✗ File too large ({} > {} bytes)", content_length, MAX_PAYLOAD_SIZE);
+                    return Ok(());
+                }
+            }
+            
             if let Ok(body) = r.text().await {
+                // Verify size limit after download
+                if body.len() > MAX_PAYLOAD_SIZE {
+                    eprintln!("✗ File too large ({} > {} bytes)", body.len(), MAX_PAYLOAD_SIZE);
+                    return Ok(());
+                }
                 let _ = std::fs::write(dir.join("boundaries.xml"), &body);
                 eprintln!("✓");
             }

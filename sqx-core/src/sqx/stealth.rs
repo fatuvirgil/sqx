@@ -33,15 +33,11 @@ pub static UA_POOL: &[&str] = &[
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
 ];
 
-/// Pick a random UA from the pool using the current timestamp as cheap entropy.
-/// Not cryptographically random, but sufficient for rotation purposes.
+/// Pick a random UA from the pool using cryptographically secure RNG.
+/// Uses rand::thread_rng() for proper randomness.
 pub fn random_ua() -> &'static str {
-    let idx = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as usize)
-        % UA_POOL.len();
-    UA_POOL[idx]
+    use rand::seq::SliceRandom;
+    UA_POOL.choose(&mut rand::thread_rng()).unwrap_or(&UA_POOL[0])
 }
 
 // ── Browser header sets ───────────────────────────────────────────────────────
@@ -61,13 +57,8 @@ pub static ACCEPT_LANGUAGES: &[&str] = &[
 ];
 
 pub fn random_accept_language() -> &'static str {
-    let idx = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as usize
-        / 7)
-        % ACCEPT_LANGUAGES.len();
-    ACCEPT_LANGUAGES[idx]
+    use rand::seq::SliceRandom;
+    ACCEPT_LANGUAGES.choose(&mut rand::thread_rng()).unwrap_or(&ACCEPT_LANGUAGES[0])
 }
 
 /// Returns a list of (header-name, value) pairs that mimic a real browser.
@@ -112,19 +103,17 @@ pub fn origin_of(url: &str) -> Option<String> {
 /// Apply jitter to `base_ms`: returns a value in the range
 /// `[base * (1 - pct/100), base * (1 + pct/100)]`.
 ///
-/// Uses nanosecond timestamp as cheap pseudo-randomness — good enough
-/// for inter-request delays.
+/// Uses rand::thread_rng() for cryptographically secure randomness,
+/// preventing timing side-channel attacks that could fingerprint the scanner.
 pub fn jittered_delay(base_ms: u64, jitter_pct: u64) -> Duration {
+    use rand::Rng;
+    
     if jitter_pct == 0 || base_ms == 0 {
         return Duration::from_millis(base_ms);
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as u64;
-
+    
     let range = base_ms * jitter_pct / 100; // half-width of the jitter band
-    let offset = nanos % (range * 2 + 1); // 0 .. 2*range inclusive
+    let offset = rand::thread_rng().gen_range(0..=range * 2);
     let ms = base_ms.saturating_sub(range) + offset;
     Duration::from_millis(ms)
 }

@@ -44,7 +44,7 @@ fn write_or_print(content: &str, out_file: Option<&str>) {
 async fn ensure_auth_if_configured(detector: &SqliDetector) -> bool {
     match detector.ensure_authenticated().await {
         Ok(()) => {
-            if detector.has_auth_session() {
+            if detector.has_auth_session().await {
                 eprintln!("[+] Login successful");
             }
             true

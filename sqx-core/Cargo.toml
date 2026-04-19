@@ -23,6 +23,7 @@ lazy_static  = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait  = { workspace = true }
 axum         = { workspace = true }
+rand         = { workspace = true }
 
 # IntelCollector + PayloadValidator dependencies
 sqlparser    = "0.52"

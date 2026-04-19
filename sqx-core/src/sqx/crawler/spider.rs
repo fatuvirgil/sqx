@@ -152,7 +152,7 @@ impl Spider {
                 .header("User-Agent", &self.user_agent)
                 .timeout(Duration::from_secs(10));
             if let Some(ref session) = self.session {
-                builder = session.apply(builder);
+                builder = session.apply(builder).await;
             }
             let resp = match builder.send().await {
                 Ok(r) => r,
@@ -167,11 +167,11 @@ impl Spider {
                 }
             };
             if let Some(ref session) = self.session {
-                session.update_from_response(&resp);
-                if !session.is_authenticated() && session.is_auto_detect_enabled() {
-                    let detected = session.detect_session_cookies(resp.headers());
+                session.update_from_response(&resp).await;
+                if !session.is_authenticated().await && session.is_auto_detect_enabled().await {
+                    let detected = session.detect_session_cookies(resp.headers()).await;
                     if !detected.is_empty() {
-                        session.insert_cookies(&detected);
+                        session.insert_cookies(&detected).await;
                     }
                 }
             }

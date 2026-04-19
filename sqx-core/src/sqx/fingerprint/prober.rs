@@ -566,13 +566,13 @@ impl TargetProber {
             .timeout(self.timeout);
 
         if let Some(ref session) = self.session {
-            builder = session.apply(builder);
+            builder = session.apply(builder).await;
         }
 
         let resp = builder.send().await?;
 
         if let Some(ref session) = self.session {
-            session.update_from_response(&resp);
+            session.update_from_response(&resp).await;
         }
 
         let status = resp.status().as_u16();

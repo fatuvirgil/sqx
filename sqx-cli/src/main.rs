@@ -26,21 +26,24 @@ fn check_authorization() {
     eprintln!("║    ✓ Understanding of applicable laws in your jurisdiction       ║");
     eprintln!("╚══════════════════════════════════════════════════════════════════╝");
     eprintln!();
-    eprintln!("   [Authorization check bypassed for testing]");
+    eprintln!("Press Enter to proceed (or Ctrl+C to abort)...");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).expect("Failed to read input");
     eprintln!();
-    // Uncomment for production:
-    // eprintln!("Press Enter to proceed (or Ctrl+C to abort)...");
-    // let mut input = String::new();
-    // std::io::stdin().read_line(&mut input).expect("Failed to read input");
-    // eprintln!();
 }
 
 #[tokio::main]
 async fn main() {
     check_authorization();
     
-    // Run startup checks (version, payloads, CVEs)
-    startup::run_startup_checks().await;
+    // Parse CLI early to check for --no-update-check
+    let args = std::env::args().collect::<Vec<_>>();
+    let no_update_check = args.contains(&"--no-update-check".to_string());
+    
+    // Run startup checks (version, payloads, CVEs) unless disabled
+    if !no_update_check {
+        startup::run_startup_checks().await;
+    }
     
     cli::Cli::parse().run().await;
 }

@@ -230,14 +230,45 @@ impl AiAdvisor {
 ///
 /// Prevents prompt injection: strips control characters, truncates, and
 /// removes template markers that could alter the instruction structure.
+/// Also removes common prompt injection keywords and patterns.
 fn sanitize_prompt_field(s: &str, max_len: usize) -> String {
-    s.chars()
+    let mut result: String = s
+        .chars()
         .filter(|c| !c.is_control() || *c == '\n') // keep newlines, drop other controls
         .take(max_len)
         .collect::<String>()
         // Remove characters that could break out of the JSON-like prompt structure
         .replace("{{", "{ {")
         .replace("}}", "} }")
+        // Neutralize common prompt injection patterns
+        .replace("IGNORE PREVIOUS", "[FILTERED]")
+        .replace("ignore previous", "[FILTERED]")
+        .replace("DISREGARD", "[FILTERED]")
+        .replace("disregard", "[FILTERED]")
+        .replace("OVERRIDE", "[FILTERED]")
+        .replace("override", "[FILTERED]")
+        .replace("NEW INSTRUCTIONS", "[FILTERED]")
+        .replace("new instructions", "[FILTERED]")
+        .replace("PROMPT:", "[FILTERED:")
+        .replace("prompt:", "[FILTERED:")
+        .replace("SYSTEM:", "[FILTERED:")
+        .replace("system:", "[FILTERED:")
+        // Remove XML-like tags that could be used for injection
+        .replace("<|", "[")
+        .replace("|>", "]")
+        // Normalize multiple spaces
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    
+    // Additional check: if the result contains suspicious patterns, truncate aggressively
+    let suspicious = ["[FILTERED]"].iter().any(|&p| result.contains(p));
+    if suspicious && result.len() > 100 {
+        result.truncate(100);
+        result.push_str("...[TRUNCATED]");
+    }
+    
+    result
 }
 
 fn build_prompt(ctx: &TargetContext, max: usize) -> String {

@@ -38,7 +38,7 @@ pub(crate) async fn run_dump(
 
     match detector.ensure_authenticated().await {
         Ok(()) => {
-            if detector.has_auth_session() {
+            if detector.has_auth_session().await {
                 eprintln!("[+] Login successful");
             }
         }

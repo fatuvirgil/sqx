@@ -465,13 +465,13 @@ impl SqliDetector {
         }
 
         if let Some(ref session) = self.session {
-            builder = session.apply(builder);
+            builder = session.apply(builder).await;
         }
 
         let response = builder.send().await?;
 
         if let Some(ref session) = self.session {
-            session.update_from_response(&response);
+            session.update_from_response(&response).await;
         }
 
         let status = response.status().as_u16();
@@ -528,13 +528,13 @@ impl SqliDetector {
         }
 
         if let Some(ref session) = self.session {
-            builder = session.apply(builder);
+            builder = session.apply(builder).await;
         }
 
         let response = builder.send().await?;
 
         if let Some(ref session) = self.session {
-            session.update_from_response(&response);
+            session.update_from_response(&response).await;
         }
 
         let status = response.status().as_u16();

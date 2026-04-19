@@ -122,7 +122,7 @@ fn read_wordlist(path: Option<String>) -> Option<Vec<String>> {
 async fn ensure_auth_if_configured(detector: &SqliDetector, context: Option<&str>) {
     match detector.ensure_authenticated().await {
         Ok(()) => {
-            if detector.has_auth_session() {
+            if detector.has_auth_session().await {
                 match context {
                     Some(label) => eprintln!("[+] [{}] Login successful", label),
                     None => eprintln!("[+] Login successful"),

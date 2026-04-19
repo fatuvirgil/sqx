@@ -79,6 +79,10 @@ pub struct Cli {
     /// Login success indicator: status code (e.g. 302) or cookie name
     #[arg(long, global = true)]
     auth_success: Option<String>,
+
+    /// Disable outbound update and CVE checks at startup
+    #[arg(long, global = true)]
+    no_update_check: bool,
 }
 
 #[derive(Subcommand)]
@@ -951,8 +955,8 @@ mod tests {
         assert!(techniques.contains(&SqliTechnique::OutOfBand));
     }
 
-    #[test]
-    fn bearer_auth_without_login_url_sets_authorization_header() {
+    #[tokio::test]
+    async fn bearer_auth_without_login_url_sets_authorization_header() {
         let session = build_session_manager(
             None,
             false,
@@ -966,11 +970,11 @@ mod tests {
         )
         .expect("session");
 
-        assert!(session.has_auth());
+        assert!(session.has_auth().await);
     }
 
-    #[test]
-    fn basic_auth_without_login_url_sets_authorization_header() {
+    #[tokio::test]
+    async fn basic_auth_without_login_url_sets_authorization_header() {
         let session = build_session_manager(
             None,
             false,
@@ -984,7 +988,7 @@ mod tests {
         )
         .expect("session");
 
-        assert!(session.has_auth());
+        assert!(session.has_auth().await);
     }
 
     #[test]

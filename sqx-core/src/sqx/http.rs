@@ -87,10 +87,12 @@ pub(crate) fn build_post_body(
                 if let Some(end) = original[start..].find(&close_tag) {
                     let after_open = start + pattern.len();
                     let close_abs = start + end;
+                    // Escape XML special characters to prevent XML injection
+                    let escaped_value = escape_xml(injected_value);
                     return format!(
                         "{}{}{}",
                         &original[..after_open],
-                        injected_value,
+                        escaped_value,
                         &original[close_abs..]
                     );
                 }
@@ -115,4 +117,21 @@ pub(crate) fn build_post_body(
                 .join("&")
         }
     }
+}
+
+/// Escape XML special characters to prevent XML injection attacks.
+/// Escapes: & < > " '
+fn escape_xml(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&apos;"),
+            _ => result.push(c),
+        }
+    }
+    result
 }

@@ -31,3 +31,4 @@ tokio-stream = "0.1"
 async-trait  = "0.1"
 axum         = "0.8"
 clap         = { version = "4", features = ["derive", "color"] }
+rand         = { version = "0.8", features = ["std", "std_rng"] }

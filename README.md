@@ -178,6 +178,17 @@ sqx bench      Run detection benchmark
 sqx replay     Replay request from file
 ```
 
+### Global Flags
+
+These flags work with any command:
+
+| Flag | Description |
+|------|-------------|
+| `--proxy` | HTTP/SOCKS5 proxy URL |
+| `--cookie` | Cookie string for authenticated requests |
+| `--no-update-check` | Disable version/CVE checks at startup |
+| `-v, -vv, -vvv` | Verbosity levels (info/debug/trace) |
+
 ## AI Integration
 
 ### Local (Default - Free)
@@ -223,6 +234,16 @@ sqx scan "http://target.com/api/users?id=1" \
   --auth-token "eyJhbGciOiJIUzI1NiIs..."
 ```
 
+## Privacy Options
+
+```bash
+# Disable update/CVE checks (air-gapped environments)
+sqx scan "http://target.com/?id=1" --no-update-check
+
+# Use local AI only (no data sent to cloud)
+sqx scan "http://target.com/?id=1" --ai-advisor --ai-model ollama:llama3.2
+```
+
 ## Proxy Support
 
 ```bash
@@ -246,6 +267,34 @@ sqx scan "http://target.com/?id=1" --proxy socks5://127.0.0.1:9050
 sqx scan "http://target.com/?id=1" --output sarif --out-file results.sarif
 # Upload results.sarif to GitHub Security tab
 ```
+
+## Security & Privacy
+
+### Authorization Confirmation
+
+**SQX requires explicit user confirmation before running.** At startup, a security warning is displayed and you must press Enter to proceed. This ensures users understand the legal and ethical implications of the tool.
+
+### Outbound Connections
+
+By default, SQX makes outbound connections at startup for:
+- **Version check**: Checks GitHub for updates
+- **Security advisories**: Fetches recent critical CVEs from NVD
+
+**To disable these checks**, use the `--no-update-check` flag:
+```bash
+sqx scan "http://target.com/?id=1" --no-update-check
+```
+
+### Out-of-Band (OOB) Domain Configuration
+
+For OOB exfiltration payloads, you **must** specify your own domain. The tool uses `{{OOB_DOMAIN}}` placeholder that requires explicit configuration:
+
+```bash
+# OOB detection requires your callback domain
+sqx scan "http://target.com/?id=1" --oob --oob-domain your-domain.com
+```
+
+**Never use the default placeholder** in production - configure your own infrastructure.
 
 ## Security & Ethics
 
