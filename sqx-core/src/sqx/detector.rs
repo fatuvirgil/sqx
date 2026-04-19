@@ -229,6 +229,18 @@ impl SqliDetector {
         let response = builder.send().await?;
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
+        // Check content length to prevent OOM from huge responses
+        const MAX_RESPONSE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+        if let Some(content_length) = response.content_length() {
+            if content_length > MAX_RESPONSE_SIZE {
+                return Err(anyhow::anyhow!(
+                    "Response too large: {} bytes (max {})",
+                    content_length,
+                    MAX_RESPONSE_SIZE
+                ));
+            }
+        }
+
         // Update session cookies from response
         if let Some(ref session) = self.session {
             session.update_from_response(&response).await;

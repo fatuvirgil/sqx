@@ -63,6 +63,72 @@ fn textarea_re() -> &'static Regex {
     })
 }
 
+/// Simple robots.txt parser — stores disallowed path patterns.
+#[derive(Debug, Default)]
+struct RobotsTxt {
+    disallowed_paths: Vec<String>,
+}
+
+impl RobotsTxt {
+    /// Parse robots.txt content and extract disallow rules for our user-agent (or wildcard).
+    fn parse(content: &str, user_agent: &str) -> Self {
+        let mut disallowed = Vec::new();
+        let mut applies_to_us = false;
+        let ua_lower = user_agent.to_lowercase();
+        
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            if line.to_lowercase().starts_with("user-agent:") {
+                let agent = line[11..].trim().to_lowercase();
+                // Rule applies if it's wildcard or matches our UA
+                applies_to_us = agent == "*" || ua_lower.contains(&agent);
+            } else if applies_to_us && line.to_lowercase().starts_with("disallow:") {
+                let path = line[9..].trim().to_string();
+                if !path.is_empty() {
+                    disallowed.push(path);
+                }
+            }
+        }
+        
+        Self { disallowed_paths: disallowed }
+    }
+    
+    /// Check if a path is allowed by robots.txt.
+    fn is_allowed(&self, path: &str) -> bool {
+        for disallowed in &self.disallowed_paths {
+            if path.starts_with(disallowed) {
+                return false;
+            }
+        }
+        true
+    }
+    
+    /// Fetch robots.txt from the given base URL.
+    async fn fetch(client: &Client, base_url: &reqwest::Url) -> Option<Self> {
+        let robots_url = format!("{}://{}/robots.txt", 
+            base_url.scheme(),
+            base_url.host_str()?);
+        
+        match client.get(&robots_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(text) = resp.text().await {
+                    debug!("Fetched robots.txt from {}", robots_url);
+                    // Use a generic UA for parsing (we check against wildcard and sqx)
+                    return Some(Self::parse(&text, "sqx"));
+                }
+            }
+            _ => {
+                debug!("No robots.txt found at {}", robots_url);
+            }
+        }
+        None
+    }
+}
+
 /// Lightweight injection-point crawler.
 pub struct Spider {
     client: Client,
@@ -88,10 +154,14 @@ impl Spider {
 
     /// Crawl from `start_url` and return injection points plus all visited page URLs.
     pub async fn crawl(&self, start_url: &str) -> Result<CrawlResult> {
-        let base_domain = reqwest::Url::parse(start_url)
-            .ok()
-            .and_then(|u| u.domain().map(str::to_string))
-            .unwrap_or_default();
+        // Use host() instead of domain() to handle both domains and IP addresses
+        let base_url = reqwest::Url::parse(start_url)
+            .map_err(|e| anyhow::anyhow!("Invalid start URL: {}", e))?;
+        let base_host = base_url
+            .host()
+            .map(|h| h.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Invalid start URL: cannot extract host"))?;
+        let base_port = base_url.port_or_known_default().unwrap_or(80);
 
         let exclude_regexes: Vec<Regex> = self
             .config
@@ -105,6 +175,13 @@ impl Spider {
         let mut queue: VecDeque<(String, usize)> = VecDeque::new();
         let mut injection_points: Vec<InjectionPoint> = Vec::new();
 
+        // Fetch robots.txt if respect_robots is enabled
+        let robots_txt = if self.config.respect_robots {
+            RobotsTxt::fetch(&self.client, &base_url).await
+        } else {
+            None
+        };
+        
         queue.push_back((start_url.to_string(), 0));
 
         while let Some((url, depth)) = queue.pop_front() {
@@ -122,7 +199,18 @@ impl Spider {
             }
             if self.config.same_domain_only {
                 if let Ok(parsed) = reqwest::Url::parse(&url) {
-                    if !self.is_valid_target_url(&parsed, &base_domain) {
+                    if !self.is_valid_target_url(&parsed, &base_host, base_port) {
+                        continue;
+                    }
+                }
+            }
+            
+            // Check robots.txt if enabled
+            if let Some(ref robots) = robots_txt {
+                if let Ok(parsed) = reqwest::Url::parse(&url) {
+                    let path = parsed.path();
+                    if !robots.is_allowed(path) {
+                        debug!("Skipping {} (disallowed by robots.txt)", url);
                         continue;
                     }
                 }
@@ -178,7 +266,7 @@ impl Spider {
 
             // Re-validate after redirects (same-domain + scheme check).
             if self.config.same_domain_only {
-                if !self.is_valid_target_url(resp.url(), &base_domain) {
+                if !self.is_valid_target_url(resp.url(), &base_host, base_port) {
                     continue;
                 }
             }
@@ -268,11 +356,15 @@ impl Spider {
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    fn is_valid_target_url(&self, url: &reqwest::Url, base_domain: &str) -> bool {
+    fn is_valid_target_url(&self, url: &reqwest::Url, base_host: &str, base_port: u16) -> bool {
         if url.scheme() != "http" && url.scheme() != "https" {
             return false;
         }
-        url.domain().unwrap_or("") == base_domain
+        // Check host matches (handles both domains and IPs)
+        let host_matches = url.host().map(|h| h.to_string()).unwrap_or_default() == base_host;
+        // Check port matches to prevent crawling different services on same host
+        let port_matches = url.port_or_known_default().unwrap_or(80) == base_port;
+        host_matches && port_matches
     }
 
     /// Extract `<form>` elements and return one [`InjectionPoint`] per form.

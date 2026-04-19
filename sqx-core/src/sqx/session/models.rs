@@ -77,4 +77,7 @@ pub struct AuthConfig {
     pub bearer_token: Option<String>,
     /// How to detect successful login (e.g., "302" for redirect, or cookie name)
     pub success_indicator: Option<String>,
+    /// If true, treat login verification failure as fatal error
+    /// If false (default), only warn and continue
+    pub strict_auth: bool,
 }

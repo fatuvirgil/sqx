@@ -99,17 +99,29 @@ impl TargetProber {
         })
     }
 
+    /// Generate a random probe parameter name to avoid fingerprinting.
+    fn random_probe_param(&self) -> String {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let chars: Vec<char> = (0..10)
+            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+            .collect();
+        format!("_x{}", chars.into_iter().collect::<String>())
+    }
+
     /// Probe target behavior with benign modified inputs.
     async fn probe_behavior(&self, url: &str) -> Result<TargetBehavior> {
         // Request 1: Normal request (baseline)
         let normal = self.get(url).await?;
 
-        // Request 2: Add a garbage parameter (?_sqx_probe=1) — verifies
+        // Request 2: Add a garbage parameter with random name — verifies
         // parameter handling behavior (response intentionally discarded)
+        // Using random param name to avoid tool fingerprinting
+        let probe_param = self.random_probe_param();
         let _garbage_url = if url.contains('?') {
-            format!("{}&_sqx_probe=1", url)
+            format!("{}&{}=1", url, probe_param)
         } else {
-            format!("{}?_sqx_probe=1", url)
+            format!("{}?{}=1", url, probe_param)
         };
         let _ = self.get(&_garbage_url).await;
 

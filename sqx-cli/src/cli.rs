@@ -80,6 +80,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     auth_success: Option<String>,
 
+    /// Treat login verification failure as fatal error
+    #[arg(long, global = true)]
+    strict_auth: bool,
+
     /// Disable outbound update and CVE checks at startup
     #[arg(long, global = true)]
     no_update_check: bool,
@@ -555,6 +559,7 @@ impl Cli {
             self.auth_pass,
             self.auth_token,
             self.auth_success,
+            self.strict_auth,
         );
         match self.command {
             Command::Scan {
@@ -814,6 +819,7 @@ fn build_session_manager(
     auth_pass: Option<String>,
     auth_token: Option<String>,
     auth_success: Option<String>,
+    strict_auth: bool,
 ) -> Option<Arc<SessionManager>> {
     let mut config = SessionConfig::default();
 
@@ -849,6 +855,7 @@ fn build_session_manager(
             basic_password: auth_pass,
             bearer_token: auth_token,
             success_indicator: auth_success,
+            strict_auth,
         });
     } else if let Some(method) = auth_method {
         let method = method.to_ascii_lowercase();
@@ -861,6 +868,7 @@ fn build_session_manager(
                 basic_password: auth_pass,
                 bearer_token: auth_token,
                 success_indicator: auth_success,
+                strict_auth,
             });
         }
     }
@@ -967,6 +975,7 @@ mod tests {
             None,
             Some("sekret".to_string()),
             None,
+            false,
         )
         .expect("session");
 
@@ -985,6 +994,7 @@ mod tests {
             Some("wonder".to_string()),
             None,
             None,
+            false,
         )
         .expect("session");
 

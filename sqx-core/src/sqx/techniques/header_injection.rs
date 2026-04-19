@@ -18,14 +18,18 @@ use crate::sqx::{
 /// Headers to probe, paired with a benign baseline value.
 /// The baseline is injected in the *normal* request so the server accepts it;
 /// payloads are appended to this value.
-const INJECTABLE_HEADERS: &[(&str, &str)] = &[
-    ("X-Forwarded-For", "127.0.0.1"),
-    ("X-Real-IP", "127.0.0.1"),
-    ("X-Client-IP", "127.0.0.1"),
-    ("User-Agent", "Mozilla/5.0 (compatible; sqx/1.0)"),
-    ("Referer", "https://example.com/"),
-    ("Cookie", "session=sqx_test"),
-];
+/// Note: User-Agent uses a random real browser UA to avoid tool fingerprinting.
+fn get_injectable_headers() -> Vec<(&'static str, String)> {
+    vec![
+        ("X-Forwarded-For", "127.0.0.1".to_string()),
+        ("X-Real-IP", "127.0.0.1".to_string()),
+        ("X-Client-IP", "127.0.0.1".to_string()),
+        // Use random real browser UA to avoid fingerprinting
+        ("User-Agent", crate::sqx::stealth::random_ua().to_string()),
+        ("Referer", "https://example.com/".to_string()),
+        ("Cookie", "session=sqx_test".to_string()),
+    ]
+}
 
 /// Quick error-based payloads — single-char openers plus common OR conditions.
 const ERROR_PAYLOADS: &[&str] = &[
@@ -66,10 +70,10 @@ impl SqliDetector {
     ) -> Vec<SqliTestResult> {
         let mut results = Vec::new();
 
-        for (header_name, baseline_value) in INJECTABLE_HEADERS {
+        for (header_name, baseline_value) in get_injectable_headers() {
             debug!("Testing header injection vector: {}", header_name);
             let found = self
-                .test_header_injection(url, header_name, baseline_value, tamper)
+                .test_header_injection(url, header_name, &baseline_value, tamper)
                 .await;
             results.extend(found);
             tokio::time::sleep(crate::sqx::stealth::jittered_delay(
@@ -263,7 +267,7 @@ impl SqliDetector {
     ) -> Vec<SqliTestResult> {
         let mut results = Vec::new();
 
-        for (header_name, baseline_value) in INJECTABLE_HEADERS {
+        for (header_name, baseline_value) in get_injectable_headers() {
             debug!("Testing POST header injection vector: {}", header_name);
             let found = self
                 .test_header_injection_post(
@@ -271,7 +275,7 @@ impl SqliDetector {
                     post_body,
                     content_type,
                     header_name,
-                    baseline_value,
+                    &baseline_value,
                     tamper,
                 )
                 .await;

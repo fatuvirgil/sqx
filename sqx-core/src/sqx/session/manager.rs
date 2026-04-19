@@ -265,10 +265,10 @@ impl SessionManager {
                     .await
                     .send()
                     .await?;
-                self.update_from_response(&resp);
+                self.update_from_response(&resp).await;
 
                 if let Some(ref indicator) = auth.success_indicator {
-                    self.verify_login_success(&resp, indicator)?;
+                    self.verify_login_success(&resp, indicator, auth.strict_auth).await?;
                 }
 
                 info!("Form login completed (status: {})", resp.status());
@@ -279,10 +279,10 @@ impl SessionManager {
                     .await
                     .send()
                     .await?;
-                self.update_from_response(&resp);
+                self.update_from_response(&resp).await;
 
                 if let Some(ref indicator) = auth.success_indicator {
-                    self.verify_login_success(&resp, indicator)?;
+                    self.verify_login_success(&resp, indicator, auth.strict_auth).await?;
                 }
 
                 info!("JSON login completed (status: {})", resp.status());
@@ -314,7 +314,12 @@ impl SessionManager {
     /// Indicator can be:
     /// - A status code (e.g., "302" for redirect after login)
     /// - A cookie name (checks if that cookie exists after login)
-    fn verify_login_success(&self, response: &reqwest::Response, indicator: &str) -> Result<()> {
+    async fn verify_login_success(
+        &self,
+        response: &reqwest::Response,
+        indicator: &str,
+        strict: bool,
+    ) -> Result<()> {
         // Check if indicator matches a status code
         if let Ok(expected_status) = indicator.parse::<u16>() {
             let actual = response.status().as_u16();
@@ -344,7 +349,17 @@ impl SessionManager {
             indicator,
             response.status()
         );
-        // Don't fail — just warn, as the user may want to proceed anyway
+
+        // If strict mode is enabled, treat verification failure as fatal
+        if strict {
+            return Err(anyhow!(
+                "Login verification failed: indicator '{}' not matched. \
+                 Use --strict-auth=false to continue anyway (not recommended for production).",
+                indicator
+            ));
+        }
+
+        // Non-strict mode: warn but continue
         Ok(())
     }
 
