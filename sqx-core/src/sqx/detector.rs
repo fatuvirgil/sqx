@@ -249,8 +249,9 @@ impl SqliDetector {
             if !session.is_authenticated().await && session.is_auto_detect_enabled().await {
                 let detected = session.detect_session_cookies(response.headers()).await;
                 if !detected.is_empty() {
-                    for (name, value) in &detected {
-                        info!("Auto-detected session cookie: {}={}", name, value);
+                    for (name, _value) in &detected {
+                        // Log only cookie name, mask the value for security
+                        info!("Auto-detected session cookie: {}=***REDACTED***", name);
                     }
                     session.insert_cookies(&detected).await;
                 }
