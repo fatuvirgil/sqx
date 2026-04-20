@@ -51,16 +51,29 @@ impl FofaClient {
     pub async fn search(&self, query: &str, size: usize) -> Result<Vec<FofaResult>> {
         let encoded_query = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, query);
 
-        let url = format!(
-            "{}?email={}&key={}&qbase64={}&size={}",
-            FOFA_API_BASE, self.email, self.api_key, encoded_query, size
-        );
-
         debug!("FOFA search (encoded): {}", &encoded_query[..20.min(encoded_query.len())]);
 
         tokio::time::sleep(Duration::from_millis(RATE_LIMIT_DELAY_MS)).await;
 
-        let response = self.http.get(&url).send().await?;
+        let response = self
+            .http
+            .get(FOFA_API_BASE)
+            .header(
+                "X-FOFA-Email",
+                reqwest::header::HeaderValue::from_str(&self.email)
+                    .context("Invalid FOFA_EMAIL for header value")?,
+            )
+            .header(
+                "X-FOFA-Key",
+                reqwest::header::HeaderValue::from_str(&self.api_key)
+                    .context("Invalid FOFA_KEY for header value")?,
+            )
+            .query(&[
+                ("qbase64", encoded_query.as_str()),
+                ("size", size.to_string().as_str()),
+            ])
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             let text = response.text().await?;
