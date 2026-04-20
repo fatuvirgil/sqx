@@ -105,16 +105,18 @@ impl ShodanClient {
     /// Get host details by IP.
     #[instrument(skip(self), fields(ip = %ip))]
     pub async fn host(&self, ip: &str) -> Result<ShodanHostResponse> {
-        let url = format!(
-            "{}/shodan/host/{}?key={}",
-            SHODAN_API_BASE, ip, self.api_key
-        );
+        let url = format!("{}/shodan/host/{}", SHODAN_API_BASE, ip);
 
         debug!("Shodan host lookup: {}", ip);
 
         tokio::time::sleep(Duration::from_millis(RATE_LIMIT_DELAY_MS)).await;
 
-        let response = self.http.get(&url).send().await?;
+        let response = self
+            .http
+            .get(&url)
+            .query(&[("key", self.api_key.as_str())])
+            .send()
+            .await?;
 
         if response.status() == 404 {
             return Err(anyhow::anyhow!("Host not found in Shodan"));
