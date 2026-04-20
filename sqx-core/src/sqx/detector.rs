@@ -48,13 +48,8 @@ pub struct SqliDetector {
     pub(crate) adaptive_sleep_secs: Arc<AtomicU64>,
 }
 
-fn build_client(timeout: Duration, proxy: Option<&str>, insecure_tls: bool) -> Result<Client> {
+fn build_client(timeout: Duration, proxy: Option<&str>, _insecure_tls: bool) -> Result<Client> {
     let mut b = Client::builder().timeout(timeout);
-    if insecure_tls {
-        b = b
-            .danger_accept_invalid_certs(true)
-            .danger_accept_invalid_hostnames(true);
-    }
     if let Some(p) = proxy {
         b = b.proxy(reqwest::Proxy::all(p)?);
     }
